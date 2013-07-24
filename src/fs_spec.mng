@@ -1,0 +1,3086 @@
+@ignore
+Hi-lock: (("^@.*" (0 (quote hi-blue-b) t)))
+Hi-lock: (("^#+.*" (0 (quote hi-green-b) t)))
+
+@old fs_spec.md
+# Graph of dependencies
+
+An SVG file showing dependencies is:
+
+<img src='fs_modules.svg' width='800' />
+
+The file `myfuse.ml` appears not to be loadable interactively.
+
+@fs_spec.md
+# Interactive top-level directives
+
+Via findlib:
+
+    #use "topfind";;
+    #require "unix";;
+    #require "bigarray";;
+    #use "fs_spec.toplevel.ml";;
+
+@old? # Interactive top-level directives
+
+In bash, before running toplevel, or executing native code, the following may improve performance (but is not necessary):
+
+    # from http://caml.inria.fr/pub/docs/manual-ocaml-4.00/manual024.html
+    export OCAMLRUNPARAM="s=8M,l=8M,i=1M"
+
+Then start the ocaml toplevel interpreter:
+
+    ocaml unix.cma bigarray.cma str.cma
+
+And type the following to load the `fs_spec.ml` file:
+
+    #cd "/tmp/l/general/research/fs/src";;
+    #use "fs_spec.toplevel.ml";;
+
+(Internal) To include parsing stuff, you can also
+
+    #cd "/tmp/l/general/research/parsing/src";;
+    #use "parse_lib.toplevel.ml";;
+
+
+(Internal) To load opsparser stuff:
+
+    #cd "/tmp/l/general/research/fs/src";;
+    #use "opsparser.toplevel.ml";;
+
+Seems difficult (impossible?) to use fuse in a toplevel. eg typical error:
+
+    # Cannot load required shared library dllFuse_stubs.
+    Reason: /tmp/l/bin/ocaml-3.12.1/lib/ocaml/site-packages/ocamlfuse/dllFuse_stubs.so: /tmp/l/bin/ocaml-3.12.1/lib/ocaml/site-packages/ocamlfuse/dllFuse_stubs.so: undefined symbol: camlidl_malloc_string.
+
+--
+
+
+
+
+@tasks issues fs_spec.md
+# Tasks
+
+  * sync, datasync
+
+  * expose spec fs via ocaml fuse
+
+  * optimizations  
+
+  * impl
+
+# Issues
+
+Format of the issues file is: prio|cat|desc
+
+(shell-command "soffice /tmp/l/general/research/fs/resources/fs_issues.ods &")
+
+FIXME this probably isn't very clever?
+
+
+prio|cat|desc
+|impl/freelist|"
+
+interaction with freelist in impl; but we don't want to keep writing
+the modified freelist to disk every time; if allocation is
+deterministic (say, we don't reuse deallocated blocks till latest
+time, and there is sufficient space available) then we can play a
+similar trick to that with max ref count - just update every 100
+allocations or so; we may lose some free space if we crash, but we may
+not care about that;
+
+"
+
+|impl/parent_pointers|"
+
+need to have parent pointers in dirs; which requires mutating two
+objects atomically when moving;
+
+do we really need parent pointers? any file/dir is accessed via a
+path, which presumably gives the parents, so parents could just be
+provided by some in-memory cache; an alternative scheme is here:
+file:///tmp/l/general/camera_uploads/tmp/2013-03-08_09.55.50.jpg
+
+decision for now: don't include in spec? a dir listing can include
+. and .., with obvious meanings; in impl, filenames can be resolved
+into dir list and name, so we don't need to deal with .. (except that
+a process has a cwd, but this is stored in long format)
+
+"
+   
+|impl/parent_pointers|"
+
+reference counting is in the spec since files track number of links -
+user visible but involves mutating two things atomically; how to deal
+with reference counting for files? and dirs?
+
+reference counting for files: without parent pointers, we run into the
+problem here:
+file:///tmp/l/general/camera_uploads/tmp/2013-03-08_10.22.56.jpg
+
+with parent pointers, we can check whether a file's parent actually
+points to the file; if not, we can roll forward to correct the error;
+but this check may need to happen every time we check the number of
+links, which is quite a lot!
+file:///tmp/l/general/camera_uploads/tmp/2013-03-08_10.41.47.jpg so
+one option would be to allow link counts to be high, and get fsck to
+correct any that are no-longer linked
+
+TEST this issue: crash system in middle of a link file, and check link
+counts when restoring system
+
+decision on ref counting: don't do for now, but include in a future
+version
+"
+
+|spec|change model of names to include trailing slash
+|spec|"
+
+note that there are several possible semantics for fsync fd: it syncs
+data associated with the fd, or it syncs all data (perhaps written by
+other processes) associated with the backing file. We opt for the
+latter interpretation, but we should test this, and make a note in the
+spec"
+
+
+|spec|"
+
+does fsync work against file or fd?
+
+need to think about readdir, when other processes are messing about with the directory; do we just want to punt on this?
+
+"
+
+|test|test whether weak-memory like behaviour is observable (see 2013-04-17)
+|test|"
+
+do writes to a file hit the disk in order? (motivation: what a db
+might like to assume; against this, there is the fsync command (or
+fdatasync) that can enforce these dependencies, so by default the
+correct answer is surely no)"
+
+|test/tool_support|"
+
+need a tool to take a list of actions (need pretty print for each
+action) and replay against a filesystem"
+
+|theory|"
+
+is there a uniform way to handle partial (mostly disk-backed, but
+partly in memory) datastructures? do we want to hold the entire
+directory hierarchy (but not the data) in memory at the same time? how
+to control the caching of data?"
+
+|theory|"
+
+new idea for persistent objects: graphs, with pointers, acyclic, new
+versions etc; the fully persistent implementation (ie all old versions
+are accessible) requires writing new versions of all blocks that are
+above a modified block; could just have two versions of the pointers
+and flick between then when creating new versions (but this requires
+that we don't confuse old versions of pointers with new versions);
+
+see notes 2013-04-26"
+
+|tmpfs|add logging layer in fuse interface
+|tmpfs|. and .. entries in dir list
+|tmpfs|link with a real block layer (see 2013-04-02)
+|tmpfs|need options eg to turn tracing on and off
+
+@fs_spec.md
+# fs_spec.ml
+## Prelude
+
+The initial code for `MyDynArray` is a hacky attempt to implement
+dynamic arrays. Later I wanted functional arrays (no update in place)
+which I tacked on. TODO this all needs to be redone. We want a
+functional interface and an efficient implementation that assumes
+linear usage (ie updates in place). We should also check that uses are
+linear.
+
+@fs_spec.ml
+
+(* dynamic arrays: resize an array to a target size, using doubling *)
+module MyDynArray1 = struct
+  
+  module A = Bigarray.Array1
+  
+  type myfusebuffer = (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
+  
+  type t = myfusebuffer (* keep abstract *)
+  
+  let get_array (da:t) = (da:myfusebuffer)
+
+  (* FIXME hopefully this works with 0 length arrays *)
+  let rec resize' target cur = (
+    let cur = (if cur=0 then 1 else cur) in
+    if target < cur then cur else resize' target (2*cur))
+  
+  (* resize an array so that it is at least as big as n; invariant: minsize <= dim (resize da minsize) *)
+  let resize da minsize = (
+    let cur = Bigarray.Array1.dim da in
+    let newsize = resize' minsize cur in
+    if (newsize = cur) then da else (
+      let newbuf = A.create (A.kind da) (A.layout da) newsize in
+      let _ = A.blit da (A.sub newbuf 0 (A.dim da)) in
+      newbuf
+    ))
+      
+end
+
+module type MYDYNARRAY = sig
+
+  type myfusebuffer = (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
+
+  type t
+
+  val of_array : myfusebuffer -> t
+
+  val of_string : string -> t
+
+  val create : unit -> t
+
+  val dim : t -> int
+
+  val resize : t -> int -> t
+
+  val blit : t * int * int -> t * int -> t
+
+  val blit_array1: t * int * int -> myfusebuffer * int -> int
+
+  val get: t -> int -> char
+
+  val set: t -> int -> char -> t
+
+  val to_array: t -> myfusebuffer
+
+  val sub: t -> int -> int -> t
+
+  (* form a new array based on arr1, but with data from arr2, at ofs, length len *)
+  val write: t -> int -> t -> int -> int -> t
+
+end
+
+
+(* like an array, but the array is potentially larger than the data we need to store, so we also keep track of the length of the data *)
+module MyDynArray2 = struct
+
+  type myfusebuffer = (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
+
+  module A = Bigarray.Array1
+
+  (* i is the length of the dynamic array, given some implementation; invariant (i,arr): i <= dim arr *)
+  type t = int * MyDynArray1.t
+
+  let dim (i,arr) = i
+
+  let resize (i,arr) j = (j,MyDynArray1.resize arr j)
+
+  (* FIXME what if dim arr = 0 ? *)
+  let of_array arr = (A.dim arr,arr)
+
+  (* convenience only; don't use in production code *)
+  let of_string bs = (
+    let arr = (Array.init (String.length bs) (String.get bs)) in
+    let contents : myfusebuffer = A.of_array Bigarray.char Bigarray.c_layout arr in
+    of_array contents)
+
+  let create () = (
+    let arr = A.create Bigarray.char Bigarray.c_layout 4096 in
+    let _ = A.fill arr '\x00' in
+    (0, arr))
+
+  (* assumes ofs1+len1<i (sim with the other ops) ; resizes if necessary, ie may not mutate in place! *)
+  let blit ((i1,arr1),ofs1,len1) ((i2,arr2),ofs2) = (
+    let size2 = ofs2+len1 in
+    let (i2,arr2) = (
+      if (i2 < size2) then (size2,MyDynArray1.resize arr2 size2) else (i2,arr2))
+    in
+    let _ = A.blit (A.sub arr1 ofs1 len1) (A.sub arr2 ofs2 len1) in
+    (i2,arr2))
+
+  (* arr2 is a buffer eg that we are reading to; we return the number of bytes copied *)
+  (* assumes ofs1+len1 < i1 *)
+  let blit_array1 ((i1,arr1),ofs1,len1) (arr2,ofs2) = (
+    let len = min len1 (A.dim arr2 - ofs2) in
+    let _ = A.blit (A.sub arr1 ofs1 len) (A.sub arr2 ofs2 len) in
+    len)
+
+  let get (i,arr) j = (if j<i then A.get arr j else raise (Invalid_argument "MyDynArray2: get, index out of bounds"))
+
+  let set (i,arr) j c = (
+    let arr = (if j > A.dim arr then (MyDynArray1.resize arr j) else (arr)) in
+    let i = (if j >= i then j+1 else i) in
+    let _ = A.set arr j c in
+    (i,arr))
+
+  let to_array (i,arr1) = (
+    let arr2 = A.create Bigarray.char Bigarray.c_layout i in
+    let _ = A.blit (A.sub arr1 0 i) arr2 in
+    arr2)
+
+  (* FIXME we need a module representing arrays, but where the ops act functionally ie they return a new array every time *)
+  (* FIXME decide what the functional interface to arrays should be; maybe we should mutate and assume arrays are used linearly? *)
+  (* behaves as functional call *)
+  let sub (i,arr) ofs len = (
+    let arr2 = A.sub arr ofs len in
+    (len,arr2))
+ 
+  let copy (i,arr) = (
+    let arr' = create () in
+    let _ = blit ((i,arr),0,i) (arr',0) in
+    arr')
+
+  (* behaves as functional call *)
+  let write arr1 ofs1 (i2,arr2) ofs2 len2 = (
+    let arr1 = copy arr1 in
+    let _ = blit ((i2,arr2),ofs2,len2) (arr1,ofs1) in
+    arr1)
+   
+end
+
+module MyDynArray = (MyDynArray2 : MYDYNARRAY)
+
+
+module Prelude = struct
+
+  module type MYSET = sig
+    type elt 
+    type t
+    val add : elt -> t -> t
+    val choose : t -> elt
+    val diff : t -> t -> t
+    val elements : t -> elt list
+    val empty : t
+    val filter : (elt -> bool) -> t -> t
+    val fold : (elt -> 'a -> 'a) -> t -> 'a -> 'a
+    val from_list : elt list -> t
+    val is_empty : t -> bool
+    val list_union : elt list -> t -> t
+    val map : (elt -> elt) -> t -> t
+    val maximal_less_than : elt -> t -> elt option
+    val mem : elt -> t -> bool
+    val remove : elt -> t -> t
+    val split : elt -> t -> t * bool * t
+    val union : t -> t -> t
+  end
+  
+  module MySet_Make = functor (Ord:Set.OrderedType) -> (struct
+    include Set.Make(Ord)
+    let maximal_less_than e s = (
+      let (smaller,_,larger) = split e s in
+      if (is_empty smaller) then None else (Some(max_elt smaller)))
+    let rec itlist f l b =
+      match l with
+        [] -> b
+      | (h::t) -> f h (itlist f t b)
+    let list_union xs s =
+      itlist (fun x -> fun s -> (*Set_earley_item.*)add x s) xs s
+    let map f s =
+      let f1 x s = (*Set_earley_item.*)add (f x) s in
+      (*Set_earley_item.*)fold f1 s (*Set_earley_item.*)empty
+    let from_list elts = 
+      let f1 elt s = add elt s in
+      itlist f1 elts empty
+  end : MYSET with type elt = Ord.t)  
+
+  module type MYMAP = sig
+    type key
+    type value
+    type ty_map
+    val empty : ty_map
+    val add : key -> value -> ty_map -> ty_map
+    val remove:key -> ty_map -> ty_map
+    val find2 : key -> ty_map -> value
+    val bindings : ty_map -> (key * value) list
+  end
+
+  (* argument to Map functor *)
+  (* FIXME what if we insert a default value? we may want to remove the k,v in the map; but this requires that we can check that a value is a default *)
+  module type MAPINPUT = sig
+      type key
+      type value
+      val compare : key -> key -> int
+      val default: value
+      val is_default: value -> bool
+  end
+  
+  module MyMap = functor (MapInput:MAPINPUT) -> (struct
+    module Ord = struct
+        type t = MapInput.key
+        let compare = MapInput.compare
+    end
+    include Map.Make(Ord)
+    type value=MapInput.value
+    type ty_map=MapInput.value t
+    let add k v m = (
+      if MapInput.is_default v then remove k m else add k v m)
+    let find2 k m =
+      if (mem k m) then (find k m) else MapInput.default
+  end : (MYMAP with type key = MapInput.key and type value = MapInput.value))
+
+  (* basic library functions *)
+  
+  type ('a,'b) sum = Inl of 'a | Inr of 'b
+  
+  let is_Inl x = (match x with | Inl x -> true | _ -> false)
+  let is_Inr x = (match x with | Inr x -> true | _ -> false)
+
+  let dest_Inl x = (match x with | Inl x -> x | _ -> failwith "dest_Inl")
+  let dest_Inr x = (match x with | Inr x -> x | _ -> failwith "dest_Inr")
+  
+  (* FIXME change names of predefined combinators to reflect use of not_epsilon (i.e. default is epsilon) *)
+  
+  let rec itlist f l b =
+    match l with
+      [] -> b
+    | (h::t) -> f h (itlist f t b);;
+  
+  let rec mem x lis =
+    match lis with
+      [] -> false
+    | (h::t) -> Pervasives.compare x h = 0 or mem x t;;
+  
+  let insert x l =
+    if mem x l then l else x::l;;
+  
+  let union l1 l2 = itlist insert l1 l2;;
+  
+  let unions l = itlist union l [];;
+  
+  
+  let ($) f g x = f(g x)
+  
+  (*
+  let read_file_as_string fn = 
+    let f = open_in fn in
+    let s = ref "" in
+    let _ = try (while(true) do s := (!s) ^ (input_line f) ^ "\n" done) with _ -> () in
+    let _ = close_in f in
+    !s
+  *)
+  
+  let lines fname = 
+    let lines = ref [] in
+    let chan = if fname="-" then Pervasives.stdin else open_in fname in
+    try
+      while true; do
+        lines := input_line chan :: !lines
+      done; []
+    with End_of_file ->
+      close_in chan;
+      List.rev !lines
+  
+  let read_file_as_string fn = 
+    let ls = lines fn in
+    ((String.concat "\n" ls)^"\n")
+  
+  (* get a list with no duplicates; inefficient? FIXME do we mean List.memq? *)
+  let unique_f res e = if List.mem e res then res else e::res
+  
+  (* this is insertion sort; alternatives? *)
+  let unique = fun e -> List.fold_left unique_f [] e
+  
+  let is_Some x = x <> None
+  
+  let dest_Some x = match x with Some y -> y | _ -> failwith "dest_Some"
+
+  let rec allpairs f l1 l2 =
+    match l1 with
+     h1::t1 ->  itlist (fun x a -> f h1 x :: a) l2 (allpairs f t1 l2)
+     | [] -> []
+
+  let rec last l =
+    match l with
+      [x] -> x
+    | (h::t) -> last t
+    | [] -> failwith "last";;
+  
+  let rec butlast l =
+    match l with
+      [_] -> []
+    | (h::t) -> h::(butlast t)
+    | [] -> failwith "butlast";;
+
+
+  let implode l = itlist (^) l "";;
+  
+  let explode s =
+    let rec exap n l =
+        if n < 0 then l else
+        exap (n - 1) ((String.sub s n 1)::l) in
+    exap (String.length s - 1) [];;
+
+  (* from http://rosettacode.org/wiki/Read_entire_file#OCaml ; when does memory mapping occur? before Unix.close? or does it continually refer to the file on disk? *)
+
+  type myfusebuffer = (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
+
+  (* tr notes: if filename is empty, the mapping fails; so in this case, we do something special *)
+  let read_file_as_array filename = (
+    let fd = Unix.openfile filename [Unix.O_RDONLY] 0o640 in
+    let len = Unix.lseek fd 0 Unix.SEEK_END in
+    let _ = Unix.lseek fd 0 Unix.SEEK_SET in
+    let shared = false in  (* modifications are done in memory only *)
+    let bstr = (if len=0 then (
+      Bigarray.Array1.create Bigarray.char Bigarray.c_layout 0
+    ) else (
+      Bigarray.Array1.map_file fd
+        Bigarray.char Bigarray.c_layout shared len))
+    in
+    Unix.close fd;
+    (bstr))
+  let (_:string -> myfusebuffer) = read_file_as_array
+
+  (* FIXME probably doesn't work if arr length 0 *)
+  let write_array_as_file arr filename = (
+    let fd = Unix.openfile filename [Unix.O_RDWR;Unix.O_CREAT;Unix.O_TRUNC] 0o640 in
+    let len = Bigarray.Array1.dim arr in
+    let _ = Unix.lseek fd 0 Unix.SEEK_SET in
+    let shared = true in  (* modifications are done in memory only *)
+    let bstr = (Bigarray.Array1.map_file fd
+                  Bigarray.char Bigarray.c_layout shared len)
+    in
+    let _ = Bigarray.Array1.blit arr bstr in 
+    let _ = Unix.close fd in
+    ())
+  let (_:myfusebuffer -> string -> unit) = write_array_as_file
+
+  module My_stream = struct 
+
+    open Bigarray
+
+    (* FIXME scons is at front; snoc is at back; change scons to snoc *)
+    (* ('a,'b) stream_ops is the type of streams implemented using type 'a, with vals in 'b *)
+    type ('a,'b) stream_ops = { dest_strm:'a -> (unit,'b*'a)sum; snc: ('b*'a) -> 'a }
+    (* the following is just for packaging streams into a single value; don't expect ops to change! *)
+    type ('a,'b) stream = { impl: 'a; ops: ('a,'b) stream_ops }
+
+    let is_snil s = (match s.ops.dest_strm s.impl with 
+      | Inl () -> true
+      | _ -> false)
+
+    let dest_stream s = (
+      let Inr(v,impl) = s.ops.dest_strm s.impl in
+      (v,{s with impl=impl}))
+
+    let snoc (c,s) = (
+      let impl = s.ops.snc (c,s.impl) in
+      {s with impl=impl})
+  
+    (* lists as streams *)
+    type 'a list_stream = ('a list,'a) stream
+    let list_stream_ops = {
+      dest_strm=(fun x -> match x with
+        | [] -> (Inl ())
+        | x::xs -> Inr(x,xs));
+      snc=(fun (x,xs) -> xs@[x])
+    }
+  
+    let rec stream_takeall s = (match is_snil s with 
+      | true -> []
+      | false -> (
+        let (c,s) = dest_stream s in
+        c::(stream_takeall s)))
+    let (_:('a,'b)stream -> 'b list) = stream_takeall
+
+
+    (* representing streams of characters using a string; impl is a string and an index *)
+    let chars_of_string_ops = {
+      dest_strm=(fun (s,i) -> (
+        if i=String.length s then Inl()
+        else Inr(String.get s i,(s,i+1))
+      ));
+      snc=(fun (c,(s,i)) -> (s^(String.make 1 c),i))
+    }
+    let chars_of_string s = {impl=(s,0); ops=chars_of_string_ops}
+    let (_:string -> (string*int,char) stream) = chars_of_string
+  
+    (* more efficient - a char stream is a string between a low and high index *)
+    let chars_of_string_ops = {
+      dest_strm=(fun (s,l,h) -> (
+        if l=h then Inl()
+        else Inr(String.get s l,(s,(l+1),h))
+      ));
+      snc=(fun (c,(s,l,h)) -> (
+        let s = (if (h=String.length s) then (
+          (* need to reallocate *)
+          let _ = if 0=String.length s then failwith "chars_of_string_ops: s length 0" else () in
+          let s' = String.make ((2*(String.length s))) '\x00' in
+          let _ = String.blit s 0 s' 0 (String.length s) in
+          s')
+          else s)
+        in
+        let _ = String.set s h c in
+        (s,l,h+1)))
+    }
+    let chars_of_string s = (
+      (* backing strings must be non-empty if we are multiplying length by 2 when resizing *)
+      if s = "" then {impl=("..",0,0); ops=chars_of_string_ops}
+      else {impl=(s,0,String.length s); ops=chars_of_string_ops})
+    let (_:string -> (string*int*int,char) stream) = chars_of_string
+  
+    (* to avoid using stream_takeall, we allow to get the stream contents directly from the impl *)
+    let chars_of_string_takeall s = (
+      let (s,l,h) = s.impl in
+      String.sub s l (h-l))
+    let (_:(string*int*int,char) stream -> string) = chars_of_string_takeall
+  
+
+    (* FIXME these stream types should be in the stream module *)
+    (* also want to deal with arrays particularly myfusebuffer; at the moment only need to read; use dynarray? *)
+    let chars_of_array_ops = {
+      dest_strm=(fun (s,l,h) -> 
+        if l=h then Inl()
+        else Inr(Array1.get s l,(s,(l+1),h)));
+      snc=(fun _ -> failwith "chars_of_array_ops")
+    }
+    let chars_of_array s = (
+      (* backing strings must be non-empty if we are multiplying length by 2 when resizing *)
+      (* we never scons, so we don't need to worry about 0 length array *)
+      {impl=(s,0,Array1.dim s); ops=chars_of_array_ops})
+    let (_:myfusebuffer -> (myfusebuffer*int*int,char) stream) = chars_of_array
+
+    let chars_of_dynarray_ops = {
+      dest_strm=(fun (s,l,h) -> 
+        if l=h then Inl()
+        else Inr(MyDynArray.get s l,(s,(l+1),h)));
+      snc=(fun (c,(s,l,h)) -> 
+        let s = MyDynArray.set s h c in
+        (s,l,h+1))
+    }
+    let chars_of_dynarray s = (
+      {impl=(s,0,MyDynArray.dim s); ops=chars_of_dynarray_ops})
+    let (_:MyDynArray.t -> (MyDynArray.t*int*int,char) stream) = chars_of_dynarray
+  
+  end
+
+  include My_stream
+  
+end
+
+
+
+
+(* based partially on http://ocaml-batteries-team.github.io/batteries-included/hdoc/BatBase64.html *)
+(* following for encoding binary data into human readable string *)
+(* FIXME should probably perform some basic checks on the input - at the momemnt we fail if input is not wellformed *)
+(* FIXME maybe pad, so output is a multiple of 4 bytes - this is what eg the base64 command line tool does; this requires an extra character to indicate "no data"; this is the "padding" referred to in the wikipedia article on base64 *)
+module Encode = struct
+
+  open Prelude
+
+  let rec string_of_chars cs = (match cs with | [] -> "" | c::cs -> (String.make 1 c)^(string_of_chars cs))
+
+  (* from batteries *)
+  type encoding_table = char array (* length 64, take a number from 0-63 and give a char *)
+  type decoding_table = int array
+
+  type safe_char = (* subtype of *) char (* should be one of the chars below *)
+
+  type bits_6 = int (* only bottom 6 bits may be non zero *)
+  type bits_8 = int
+  
+  let chars = [|
+          'A';'B';'C';'D';'E';'F';'G';'H';'I';'J';'K';'L';'M';'N';'O';'P';
+          'Q';'R';'S';'T';'U';'V';'W';'X';'Y';'Z';'a';'b';'c';'d';'e';'f';
+          'g';'h';'i';'j';'k';'l';'m';'n';'o';'p';'q';'r';'s';'t';'u';'v';
+          'w';'x';'y';'z';'0';'1';'2';'3';'4';'5';'6';'7';'8';'9';'+';'/'
+  |]
+  
+  let make_decoding_table tbl =
+          if Array.length tbl <> 64 then failwith "make_decoding_table";
+          let d = Array.make 256 (-1) in
+          for i = 0 to 63 do
+                  Array.unsafe_set d (int_of_char (Array.unsafe_get tbl i)) i;
+          done;
+          d
+  
+  let inv_chars = make_decoding_table chars
+  
+  (* data contains at least 32 bits? what are the assumptions on data? *)
+  (* count is number of bits in data that are valid; valid bits are count-1,count-2,...,0 *)
+  let rec encode (sofar,data,count,input) = (
+    (* try and output a char if possible *)
+    if (count >= 6) then (
+      (* at least 6 bits in data - output an encoded char *)
+      let d = (data asr (count - 6)) land 63 in
+      let c = (Array.unsafe_get chars d) in
+      encode ((snoc (c,sofar)),data,count-6,input)
+    ) else (
+      match is_snil input with
+      | true -> (
+        (* tricky case - less that 6 bits available *)
+        if (count > 0) then 
+          let d = (data lsl (6-count)) land 63 in
+          let c = (Array.unsafe_get chars d) in
+          snoc (c,sofar)
+        else
+          sofar)
+      | false -> (
+        let (c,input) = dest_stream input in
+        let data = (data lsl 8) lor (Char.code c) in
+        let count = count + 8 in
+        encode (sofar,data,count,input))))
+
+  let encode_string s = (
+    let cs = encode ((chars_of_string ""),0,0,chars_of_string s) in
+    chars_of_string_takeall cs)
+  let (_:string->string) = encode_string
+  
+  (* the data is decoded bits *)
+  let rec decode (sofar,data,count,input) = (
+    if (count >= 8) then (
+      (* at least 8 bits in data *)
+      let d = (data asr (count - 8)) land 0xFF in
+      let c = Char.chr d in
+      decode (snoc (c,sofar),data,count-8,input)
+    ) else (
+      match is_snil input with 
+      | true -> (
+        (* assume the data is 0 padding bytes, so discard *)
+        sofar)
+      | false -> (
+        let (c,input) = dest_stream input in
+        let d = Array.unsafe_get inv_chars (Char.code c) in
+        let data = (data lsl 6) lor d in
+        decode (sofar,data,count+6,input))))
+ 
+  let decode_string s = (
+    let cs = decode ((chars_of_string ""),0,0,chars_of_string s) in
+    chars_of_string_takeall cs)
+  let (_:string->string) = decode_string
+
+  let encode_array s = (
+    let cs = encode ((chars_of_string ""),0,0,chars_of_array s) in
+    let cs = stream_takeall cs in
+    string_of_chars cs)
+  let (_:myfusebuffer->string) = encode_array
+  
+    
+  (* test 
+  let _ = encode_string "Man is distinguished"
+  let _ = encode_string "Man is distinguis"
+  let _ = decode_string "TWFuIGlzIGRpc3Rpbmd1aXN"
+  *)
+
+  (* further fiddling *)
+  (*
+  let bits_6_of_8 = (
+    let is_snil=(fun (s,data,count) -> (count=0) && (s.ops.is_snil s.impl)) in
+    let rec dest_scons=(fun (s,data,count) -> (
+      if count >= 6 then (
+        (* at least 6 bits in data - output an encoded char *)
+        let d = (data asr (count - 6)) land 63 in
+        (d,(s,data,count-6))
+      ) else (
+        match s.ops.is_snil s.impl with
+        | true -> (
+          (* tricky case - less that 6 bits available *)
+          (* this is only called if not is_snil, which implies that count > 0 *)       
+          let d = (data lsl (6-count)) land 63 in
+          (d,(s,data,0)))
+        | false -> (
+          let (c,s_impl) = s.ops.dest_scons s.impl in
+          let s = {s with impl=s_impl} in
+          let data = (data lsl 8) lor (Char.code c) in
+          let count = count + 8 in
+          dest_scons (s,data,count)))))
+    in
+    let scons=(fun _ -> failwith "bits_6_of_8") in
+    let ops = { is_snil; dest_scons; scons } in
+    fun s -> { impl=(s,0,0); ops=ops })
+  let (_:('a,char)stream -> (('a,char)stream*int*int,bits_6)stream) = bits_6_of_8
+
+  let encode_6 = (
+    let is_snil=(fun s -> s.ops.is_snil s.impl) in
+    let dest_scons=(fun s -> 
+      let (i,s_impl) = s.ops.dest_scons s.impl in
+      let s = {s with impl=s_impl} in
+      let c = (Array.unsafe_get chars i) in
+      (c,s)) 
+    in
+    let scons=(fun _ -> failwith "encode_6") in
+    let ops = { is_snil; dest_scons; scons } in
+    fun s -> {impl = s; ops=ops})
+  let (_:('a,bits_6)stream -> (('a,bits_6)stream,safe_char) stream) = encode_6
+  (* FIXME might be nice to have record notation for types, rather than pairs *)
+  *)
+
+  (* test 
+  let s = chars_of_string "Man"
+  let s2 = bits_6_of_8 s
+  let s3 = encode_6 s2 
+  let _ = stream_takeall s3  
+  *)
+
+end
+
+
+
+@test streams
+
+let int_stream_ops = (
+   let is_snil=(fun _ -> false) in
+   let rec dest_scons=(fun i -> (i,i+1)) in
+   { is_snil; dest_scons; scons=(fun _ -> failwith "int_stream_ops") })
+
+let int_stream = { impl=0; ops=int_stream_ops }
+
+let rec take n s = (if n = 0 then [] else 
+   let (c,impl) = s.ops.dest_scons s.impl in
+   c::(take (n-1) {s with impl=impl}))
+
+let _ = take 10 int_stream
+
+let _ = stream_takeall (chars_of_string "hello")
+
+
+@test mydynarray
+
+module A = Bigarray.Array1
+
+let tmp = A.create Bigarray.char Bigarray.c_layout 4096
+
+let tmp2 = A.of_array Bigarray.char Bigarray.c_layout [| 'h';'e';'l';'l';'o' |]
+
+let _ = A.blit (A.sub tmp2 0 5) (A.sub tmp 0 5)
+
+let tmp3 = MyDynArray.create ()
+
+let _ = MyDynArray.dim tmp3
+
+let tmp3 = MyDynArray.blit ((MyDynArray.of_array tmp2),0,5) (tmp3,0)
+
+let _ = MyDynArray.dim tmp3
+
+let tmp4 = A.create Bigarray.char Bigarray.c_layout 4096
+
+let _ = MyDynArray.blit_array1 (tmp3,0,5) (tmp4,0)
+
+let _ = A.get tmp4 4
+
+@fs_spec.md
+## File utils
+
+Basic functions dealing with normal files.
+
+@fs_spec.ml
+module File_utils = struct
+  
+  (* in this module, filenames (lists of strings) are absolute *)
+  let string_of_longfname s = "/" ^ (String.concat "/" s)
+  
+  (* return a list of list of strings - a long filename is a list of dirs and a filename *)
+  let ls d = 
+    let lines = ref [] in
+    let h = Unix.opendir (string_of_longfname d) in
+    try
+      while true; do
+        lines := Unix.readdir h :: !lines
+      done; []
+    with End_of_file ->
+      Unix.closedir h;
+      List.map (fun s -> d@[s]) (List.filter (fun s -> not (s="." || s = "..")) (List.rev !lines))
+  let (_:string list -> string list list) = ls
+  
+  let is_dir d = (
+    let open Unix.LargeFile in
+    let stats = stat (string_of_longfname d) in
+    stats.st_kind = Unix.S_DIR)
+    
+  let is_file f = not (is_dir f)
+    
+  (*  test
+  let files = List.filter is_file (ls ["tmp";"imgs"]) 
+  *)
+  
+end
+
+@fs_spec.md
+## Fs_types
+@fs_spec.ml
+
+(* as an optimization, we expect that each of these refs is actually a ref to a sector *)
+
+module Fs_types = struct
+
+  open Prelude
+
+  type error =
+      E2BIG
+    | EACCES
+    | EAGAIN
+    | EBADF
+    | EBUSY
+    | ECHILD
+    | EDEADLK
+    | EDOM
+    | EEXIST
+    | EFAULT
+    | EFBIG
+    | EINTR
+    | EINVAL
+    | EIO
+    | EISDIR
+    | EMFILE
+    | EMLINK
+    | ENAMETOOLONG
+    | ENFILE
+    | ENODEV
+    | ENOENT
+    | ENOEXEC
+    | ENOLCK
+    | ENOMEM
+    | ENOSPC
+    | ENOSYS
+    | ENOTDIR
+    | ENOTEMPTY
+    | ENOTTY
+    | ENXIO
+    | EPERM
+    | EPIPE
+    | ERANGE
+    | EROFS
+    | ESPIPE
+    | ESRCH
+    | EXDEV
+    | EWOULDBLOCK
+    | EINPROGRESS
+    | EALREADY
+    | ENOTSOCK
+    | EDESTADDRREQ
+    | EMSGSIZE
+    | EPROTOTYPE
+    | ENOPROTOOPT
+    | EPROTONOSUPPORT
+    | ESOCKTNOSUPPORT
+    | EOPNOTSUPP
+    | EPFNOSUPPORT
+    | EAFNOSUPPORT
+    | EADDRINUSE
+    | EADDRNOTAVAIL
+    | ENETDOWN
+    | ENETUNREACH
+    | ENETRESET
+    | ECONNABORTED
+    | ECONNRESET
+    | ENOBUFS
+    | EISCONN
+    | ENOTCONN
+    | ESHUTDOWN
+    | ETOOMANYREFS
+    | ETIMEDOUT
+    | ECONNREFUSED
+    | EHOSTDOWN
+    | EHOSTUNREACH
+    | ELOOP
+    | EOVERFLOW
+    | EUNKNOWNERR of int
+ 
+  (*
+  type store_ref = Store_ref of int
+ 
+  let dest_store_ref (Store_ref i) = i
+  *)
+
+  type name = string (* shortest component of a filename - doesn't include /; may be empty; may be . or .. *)
+  
+  type dir_ref = Dir_ref of int
+
+  let dest_dir_ref (Dir_ref i) = i
+
+
+  (* a reference to a map of entries *)
+  (*
+  type entries_ref = Entries_ref of int
+
+  let dest_entries_ref (Entries_ref i) = i
+  *)
+
+  type inode_ref = Inode_ref of int
+
+  let dest_inode_ref (Inode_ref i) = i
+
+  (*
+  type file_contents_ref = File_contents_ref of int
+
+  let dest_file_contents_ref (File_contents_ref i) = i
+  *)
+
+  (* directories *)
+  type entry = (dir_ref,inode_ref) sum
+  let is_dir_ref_entry = is_Inl
+  let is_inode_ref_entry = is_Inr
+  let dest_dir_ref_entry = dest_Inl
+  let dest_inode_ref_entry = dest_Inr
+
+  module Entries = MyMap(
+    struct 
+      type key = name
+      type value = entry option
+      let compare = Pervasives.compare
+      let default = None
+      let is_default = (fun x -> x=None)
+    end)
+
+  type entries = Entries.ty_map (* FIXME in spec? *)
+
+  type dir = {
+    dentries:entries
+  }
+
+
+  (* inodes *)
+  type bytes = MyDynArray.t
+
+  type file_contents = bytes (* really a map from index to ... *)
+
+  type inode = {
+    fcontents:file_contents
+  }
+
+  (* state type *)
+
+  module Dir_map = MyMap(
+    struct 
+      type key = dir_ref
+      type value = dir option
+      let compare = Pervasives.compare
+      let default = None
+      let is_default = (fun x -> x=None)
+    end)
+
+  module Inode_map = MyMap(
+    struct
+      type key = inode_ref
+      type value = inode option
+      let compare = Pervasives.compare
+      let default = None
+      let is_default = (fun x -> x=None)
+    end)
+
+  type state = {
+    dirs:Dir_map.ty_map;
+    (* entries:Entries_map.ty_map; *)
+    inodes:Inode_map.ty_map;
+    (* contents:Contents_map.ty_map *)
+  }
+
+  let state0 = {
+    dirs=Dir_map.empty;
+    inodes=Inode_map.empty;
+    (* entries=Entries_map.empty;
+    contents=Contents_map.empty *)
+  }
+
+  type ret_value = None1 | Int1 of int | Bytes1 of bytes (* FIXME add init return type *) | Names1 of name list
+    | Stats1 of Unix.LargeFile.stats
+  let dest_bytes1 (Bytes1 bs) = bs
+
+
+  (* return type for functions on state *)
+  (*
+  type ty_return = {
+    state1: state;
+    ret1: ret_value; 
+    err1: error option
+  } 
+  *)  
+ 
+  (* names types; also type name earlier *)
+
+  (* following moved from ops parser *)
+  type dirname = string list
+  type filename = string list (* non-empty *)
+
+  (* the type of parsed paths; what is important is whether the name ends with a slash *)
+  type ty_name_list2 = {
+    ns2: name list;
+    ends_with_slash2: bool; 
+  }
+
+  (* we cannot supply Fname from user space: a name /tmp/tmp.txt may refer to a file or a dir *)
+  (* resolved name *)
+  (* type rname1 = Dname1 of name list | Fordname1 of name list *)
+  (* resolved name relative to a state *)
+  type rname2 = 
+    Dname2 of (dir_ref * dir) * ty_name_list2 
+  | Fname2 of (inode_ref * inode) * ty_name_list2 
+  | None2 of ty_name_list2
+  | Err2 of (inode_ref * inode) * ty_name_list2 
+  (* invariant: if Fname2 ns, then not (ns.ends_with_slash2) *)
+  (* invariant: if Err2 then ns.ends_with_slash2 *)
+  (* FIXME since these are resolved, we may want to include the i0_ref and d0_ref *)
+
+  let is_Err2 x = (match x with | Err2 _ -> true | _ -> false)
+
+  let name_list_of_rname2 n = (match n with 
+    | Dname2 (_,ns) -> ns
+    | Fname2 (_,ns) -> ns
+    | None2 ns -> ns
+    | Err2 (_,ns) -> ns)
+ 
+  let string_of_rname2 n = (
+    let ns = name_list_of_rname2 n in
+    ((String.concat "/" ns.ns2)^(if ns.ends_with_slash2 then "/" else "")))
+
+  let is_None2 x = (match x with None2 _ -> true | _ -> false)
+
+
+
+  (* 
+  type ty_op = 
+      LN of filename * dirname * name
+    | UNLINK of dirname * name
+    | MKDIR of dirname * name 
+    | RMDIR of dirname * name
+    | TOUCH of dirname * name
+    | RM of dirname * name
+    | MVDIR of dirname * name * dirname * name
+    | MV of dirname * name * dirname * name
+    | CP of filename * dirname * name
+    | CPDIR of dirname * dirname * name
+    | WRITE of filename * string
+    | WRITE64 of filename * int * string (* int is offset, string is base64 encoded data *)
+  *)
+
+  type ty_return2 = {
+    state2: state;
+    ret2: ret_value;
+  } 
+  let return s = { state2=s; ret2=None1 }
+
+
+
+  (* from unix.mli *)
+  type open_flag =
+      O_RDONLY                    (** Open for reading *)
+    | O_WRONLY                    (** Open for writing *)
+    | O_RDWR                      (** Open for reading and writing *)
+    | O_NONBLOCK                  (** Open in non-blocking mode *)
+    | O_APPEND                    (** Open for append *)
+    | O_CREAT                     (** Create if nonexistent *)
+    | O_TRUNC                     (** Truncate to 0 length if existing *)
+    | O_EXCL                      (** Fail if existing *)
+    | O_NOCTTY                    (** Don't make this dev a controlling tty *)
+    | O_DSYNC                     (** Writes complete as `Synchronised I/O data
+                                     integrity completion' *)
+    | O_SYNC                      (** Writes complete as `Synchronised I/O file
+                                     integrity completion' *)
+    | O_RSYNC                     (** Reads complete as writes (depending on
+                                     O_SYNC/O_DSYNC) *)
+    | O_SHARE_DELETE              (** Windows only: allow the file to be deleted
+                                   while still open *)
+
+  type file_perm = int
+
+  (* top-level labels, intended to mirror the syscalls, but with functional interface; TODO need to incorporate file descriptors, "current position" etc *)
+  type ty_label = 
+    | LINK of (string * string)
+    | MKDIR of (string * file_perm)
+    | OPEN of (string * open_flag list)
+    | READ of (string * int * int)
+    | READDIR of string
+    | RENAME of (string * string)
+    | RMDIR of string
+    | STAT of string
+    | TRUNCATE of (string * int)
+    | UNLINK of string
+    | WRITE of (string * int * bytes * int)
+
+
+end
+
+@fs_spec.md
+## Lifting basic functions to state
+@fs_spec.ml
+
+module Lift = struct
+
+  open Fs_types
+
+  (* these update the actual maps *)
+
+  let update_dirs s k v = {s with dirs=(Dir_map.add k v s.dirs) }
+  let (_:state -> dir_ref -> dir option -> state) = update_dirs
+    
+  (*
+  let update_entries s k v = {s with entries=(Entries_map.add k v s.entries) }
+  let (_:state -> entries_ref -> Entries.ty_map option -> state) = update_entries
+  *)
+
+  let update_inodes s k v = {s with inodes=(Inode_map.add k v s.inodes) }
+  let (_:state -> inode_ref -> inode option -> state) = update_inodes
+
+  (*
+  let update_contents s k v = {s with contents=(Contents_map.add k v s.contents) }
+  let (_:state -> file_contents_ref -> bytes option -> state) = update_contents
+  *)
+
+  (* common case is to update with Some *)
+  let update_drs_some s (k,v) = (update_dirs s k (Some v))
+  let update_inds_some s (k,v) = (update_inodes s k (Some v))
+  (*
+  let update_ents_some s (k,v) = (update_entries s k (Some v))
+  let update_cnts_some s (k,v) = (update_contents s k (Some v))
+  *)
+  
+  (* lift find2 *)
+  let lookup_dir s k = Dir_map.find2 k s.dirs
+  let (_:state -> dir_ref -> dir option) = lookup_dir
+
+  (*
+  let lookup_entries s k = Entries_map.find2 k s.entries
+  let (_:state -> entries_ref -> Entries.ty_map option) = lookup_entries
+  *)
+
+  let lookup_inode s k = Inode_map.find2 k s.inodes
+  let (_:state -> inode_ref -> inode option) = lookup_inode
+
+  (* these add entries to the maps *)
+  
+  (* r is an entries_ref *)
+  let update_ents_pointwise s (d0_ref,d0) k v = (
+    let m = d0.dentries in
+    let m' = Entries.add k v m in
+    let s' = update_drs_some s (d0_ref,{d0 with dentries=m'}) in
+    s')
+  let (_:state -> (dir_ref * dir) -> name -> entry option -> state) = update_ents_pointwise
+
+  (* FIXME note that a dir_ref and an inode_ref can have the same underlying number, but this is not typically allowed in standard filesystems (at least in a single fs) *)
+
+  (* FIXME want to use new_dir, not this *)
+  let _FIXME_new_dir_ref s = (
+    let binds = Dir_map.bindings s.dirs in
+    let binds = List.map (fun (k,v) -> dest_dir_ref k) binds in
+    let max = List.fold_left (fun m -> fun r -> max m r) 0 binds in
+    Dir_ref(max+1))
+ 
+  let new_dir s0 = (
+    let d0_ref = _FIXME_new_dir_ref s0 in
+    let d0 = { dentries = Entries.empty } in
+    let s0 = update_drs_some s0 (d0_ref,d0) in
+    (s0,(d0_ref,d0)))
+
+  (*
+  let new_entries_ref s = (
+    let binds = Entries_map.bindings s.entries in
+    let binds = List.map (fun (k,v) -> dest_entries_ref k) binds in
+    let max = List.fold_left (fun m -> fun r -> max m r) 0 binds in
+    Entries_ref(max+1))
+  *)
+
+  let _FIXME_new_inode_ref s = (
+    let binds = Inode_map.bindings s.inodes in
+    let binds = List.map (fun (k,v) -> dest_inode_ref k) binds in
+    let max = List.fold_left (fun m -> fun r -> max m r) 0 binds in
+    Inode_ref(max+1))
+
+  let new_inode s0 = (
+    let i0_ref = _FIXME_new_inode_ref s0 in
+    let i0 = { fcontents=(MyDynArray.create ()) } in
+    let s0 = update_inds_some s0 (i0_ref,i0) in
+    (s0,(i0_ref,i0)))
+  
+
+  (*
+  let new_contents_ref s = (
+    let binds = Contents_map.bindings s.contents in
+    let binds = List.map (fun (k,v) -> dest_file_contents_ref k) binds in
+    let max = List.fold_left (fun m -> fun r -> max m r) 0 binds in
+    File_contents_ref(max+1))
+  *)   
+end
+
+@fs_spec.md
+## Common functions
+@fs_spec.ml
+
+module Common = struct
+  
+  open Prelude
+  open Fs_types
+  open Lift    
+
+  let string_of_entry e = (
+    let i = (match e with
+    | Inl dref -> (string_of_int (dest_dir_ref dref))
+    | Inr iref -> (string_of_int (dest_inode_ref iref)))
+    in
+    "("^i^")")
+
+  let rec string_of_dir s dirname dir = (
+    let e = (dir.dentries) in
+    let bindings = Entries.bindings e in
+    let this_dir = (String.concat "\n" (List.map (fun (k,Some v) -> k^(string_of_entry v)) bindings)) in    
+    let this_dir = if bindings <> [] then this_dir ^ "\n" else this_dir in
+    let other_dirs = List.filter (fun (k,v) -> is_Some v && is_dir_ref_entry (dest_Some v)) bindings in
+    let others = List.map (fun (k,Some v) -> string_of_dir s (k^(string_of_entry v)) (dest_Some (lookup_dir s (dest_dir_ref_entry v)))) other_dirs in
+    "Directory "^dirname^":\n"
+    ^ this_dir
+    ^ (String.concat "" others))
+    
+  (* assume no cycles *)
+  let string_of_state s = (
+    let Some(root) = lookup_dir s (Dir_ref 0) in
+    (string_of_dir s "/" root))
+
+end
+
+@test
+
+(* FIXME might be nice to have an operation of merging, given two states, and join one root as a dir in the other state *)
+
+open Prelude
+open Fs_types
+open Lift
+open Common
+
+let root_entries = (Entries_ref 0,Entries.empty)
+let root = (Dir_ref 0, { dentries=(Entries_ref 0) })
+
+let tmp_entries = (Entries_ref 1,Entries.empty)
+let tmp = (Dir_ref 1, { dentries=(Entries_ref 1) })
+
+let tmptxt = (Inode_ref 0, {dummy=()} )
+
+let atxt = (Inode_ref 1, {dummy=()} )
+
+let s0 = state0
+(* root directory *)
+let s0 = update_dirs s0 (fst root) (Some(snd root))
+let s0 = update_entries s0 (fst root_entries) (Some(snd root_entries))
+(* tmp directory *)
+let s0 = update_dirs s0 (fst tmp) (Some(snd tmp))
+let s0 = update_entries s0 (fst tmp_entries) (Some(snd tmp_entries))
+(* link tmp dir at /tmp *)
+let s0 = update_ents_pointwise s0 (fst root_entries) "tmp" (Some(Inl(fst tmp)))
+(* add and link tmp.txt at /tmp.txt *)
+let s0 = update_inodes s0 (fst tmptxt) (Some(snd tmptxt))
+let s0 = update_ents_pointwise s0 (fst root_entries) "tmp.txt" (Some(Inr(fst tmptxt)))
+(* add and link a.txt at /tmp/a.txt *)
+let s0 = update_inodes s0 (fst atxt) (Some(snd atxt))
+let s0 = update_ents_pointwise s0 (fst tmp_entries) "a.txt" (Some(Inr(fst atxt)))
+
+let _ = print_endline (string_of_state s0)
+
+
+@fs_spec.md
+## `Fs_ops1`
+
+Implement the basic file system operations
+
+List of all operations involved in dependencies:
+
+  * creation of a `dir_ref` can be dependent on creation of a new entries (eg `mkdir`)
+  * `update_ents_pointwise` (`internal_link_dir` or `internal_link_file`) can be dependent on creation of a new `dir_ref` (and writing of that `dir_ref` into `s0.dirs`) (eg `mkdir`)
+  * `internal_link_dir` can be dependent on `update_ents_pointwise` (eg `mkdir`)
+  * creation of a new `inode_ref` can be dependent on creation of a new `file_contents` (eg touch)
+
+@fs_spec.ml
+
+module Fs_ops1 = struct
+
+  open Prelude
+  open Fs_types
+  open Lift
+  open Common
+
+  (* an initial state with a root dir *)
+  let root = (Dir_ref 0, { dentries=Entries.empty }) 
+
+  let state0 = (
+    let s0 = update_drs_some state0 root in
+    s0)  
+
+  let get_dir s0 d0_ref = (
+    let Some(d0) = lookup_dir s0 d0_ref in
+    d0)
+
+  let get_inode s0 i0_ref = (
+    let Some(i0) = lookup_inode s0 i0_ref in
+    i0)
+
+  (*
+  let get_entries s0 es0_ref = (
+    let Some(es0) = lookup_entries s0 es0_ref in
+    es0)
+  *)
+
+  (* FIXME may prefer a version that returns a (ref,obj) option ; see eg mvdir *)
+  let resolve1 s0 (d0_ref,d0) name = (
+    let m = d0.dentries in
+    Entries.find2 name m)
+  let (_:state -> (dir_ref * dir) -> name -> entry option) = resolve1
+
+@dep.md
+### `internal_link_dir`
+
+|-|-|
+|Name        |`internal_link_dir`                          |
+|Type        |Auxiliary (not available to users)  |
+|Description |Link directory d1 into d0 under name|
+
+Dependencies:
+
+  * Before the on-disk change to `d0.entries`, `d1` must be on-disk at `d1_ref`. By extension, `d1.dentries` must point to a valid entries block, but this need not be synced (up to date). 
+
+  * `d0` need not even be on disk. But then if we ever write the newest version of `d0.entries` to disk, which contains `d1_ref`, clearly `d1_ref` needs to be on disk. So for the updated version of `d0.entries`, there is a dependency to `d1_ref`. Clearly future changes to `d1` must be picked up via `d1_ref`. But we do not need to have a dependency to the latest version of `d1_ref` (but in fact, `d1_ref` isn't versioned? it is supposed to represent a persistent reference to a directory; it must exist, but needn't be the latest version of that directory?)
+
+In general, what things are versioned? Not `d_ref`. But directories (which can change attributes etc, not modelled here) and directory entries in particular, and file contents. And inodes (which can change attribtes etc, not modelled here) but not `inode_ref`. 
+
+  * `d1_ref` must exist, and be valid (reference a valid directory)
+  * `d1` should be the in-mem version current at the time the `internal_link_dir` call was made (or any later version?). On-disk, `d1` may be some way behind when the link is written. Or maybe not? Suppose we make changes to `d1`, then link into `d0`. Suppose `d0` gets updated on disk; does it have to point to an updated `d1`? Or can it point to an older version of `d1`? Probably it can point to an older version of `d1` (the model is that `d1` had operations pending on it, but `d0` was updated to point to `d1`).
+  * `d0.entries` gets a new version. On-disk, `d0.entries` may lag.
+
+Pending ops:
+
+  * `d0.entries` can have a pending op to add an entry
+
+Atomicity: should be a single atomic action
+
+@fs_spec.ml
+
+  (* link directory d1 into d0 under name *)
+  let internal_link_dir s0 (d0_ref,d0) (d1_ref,d1) name = (
+    let s0 = update_ents_pointwise s0 (d0_ref,d0) name (Some(Inl(d1_ref))) in
+    s0)
+  let (_:state -> (dir_ref * dir) -> (dir_ref * dir) -> name -> state) = internal_link_dir
+
+  let internal_unlink s0 (d0_ref,d0) name = (
+    let s0 = update_ents_pointwise s0 (d0_ref,d0) name None in
+    s0)
+  let (_:state -> (dir_ref * dir) -> name -> state) = internal_unlink
+
+
+@dep.md
+### `internal_link_file`
+
+|-|-|
+|Name    |`internal_link_file`                       |
+|Type    |Auxiliary (not available to users) FIXME it is in some form|
+|Description|Link file i1 into d0 under name   |
+
+Dependencies: 
+
+  * Before the on-disk change to `d0.entries`, `i1` must be on-disk at `i1_ref`. By extension, whatever contents `i1` points to must be valid on disk, but need not be synced.
+
+  * As `internal_link_dir`, `i0` need not be on disk.
+
+Pending ops:
+
+  * `d0.entries` as `internal_link_dir`
+
+Atomicity: single atomic op
+
+@fs_spec.ml
+
+  let internal_link_file s0 (i1_ref,i1) (d0_ref,d0) name = (
+    let s0 = update_ents_pointwise s0 (d0_ref,d0) name (Some(Inr(i1_ref))) in
+    s0)
+  let (_:state -> (inode_ref * inode) -> (dir_ref * dir) -> name -> state) = internal_link_file
+
+
+@dep.md
+### `link_file`
+
+|-|-|
+|Name    |`link_file`                       |
+|Type    |User function|
+|Description|Link file i1 into d0 under name   |
+
+Dependencies: 
+
+Pending ops:
+
+Atomicity: single atomic op
+
+@fs_spec.ml
+
+  let link_file s0 (i1_ref,i1) (d0_ref,d0) name = (
+    let s0 = internal_link_file s0 (i1_ref,i1) (d0_ref,d0) name in
+    return s0)
+  let (_:state -> (inode_ref * inode) -> (dir_ref * dir) -> name -> ty_return2) = link_file
+
+@dep.md
+### `unlink`
+
+|-|-|
+|Name    |`unlink`                       |
+|Type    |User function|
+|Function|Remove entry `name` from `d0`|
+
+Dependencies:
+
+  * Do we require `d0_ref` and `d0` to be synced, or even on-disk? No. We are just creating a new version of `d0.entries`, which can be synced later.
+
+Pending ops:
+ 
+  * `d0.entries` as `internal_link_dir`
+
+Atomicity: single atomic op
+
+@fs_spec.ml
+
+  let unlink s0 (d0_ref,d0) name = (
+    let s0 = update_ents_pointwise s0 (d0_ref,d0) name None in
+    return s0)
+  let (_:state -> dir_ref * dir -> name -> ty_return2) = unlink
+
+@dep.md
+### `mkdir`
+
+|-|-|
+|Name    |`mkdir`                       |
+|Type    |User function|
+|Function|Create a new directory under `name` in `d0`|
+
+Dependencies:
+
+  * the new dir `d` depends on the new entries `d_entries`
+  * the updated version of `d0` depends on `d`
+
+Pending ops:
+
+  * the state: create a new entry
+  * the state: create a new dir
+  * as `internal_link_dir`
+
+So the modification of `d0.entries` has dependency on create-a-new-dir, which has a dependency on create-a-new-entry
+
+Atomicity: single atomic op
+
+@fs_spec.ml
+
+  (* FIXME assumes name doesn't exist *)
+
+  let mkdir s0 (d0_ref,d0) name = (
+    let (s0,(d1_ref,d1)) = new_dir s0 in
+    (* link d1 into d0 *)
+    let s0 = internal_link_dir s0 (d0_ref,d0) (d1_ref,d1) name in
+    return s0)
+  let (_:state -> dir_ref * dir -> name -> ty_return2) = mkdir
+
+@dep.md
+### `rmdir`
+
+|-|-|
+|Name    |`rmdir`                       |
+|Type    |User function|
+|Function|Remove a directory `name` in `d0`|
+
+See `unlink`
+
+@fs_spec.ml
+
+  (* also works for files *)
+  let rmdir s0 (d0_ref,d0) name = (unlink s0 (d0_ref,d0) name)
+  let (_:state -> dir_ref * dir -> name -> ty_return2) = rmdir
+
+@dep.md
+### `touch`
+
+|-|-|
+|Name    |`touch`                       |
+|Type    |User function|
+|Function|Add a file `name` in `d0`|
+
+Dependencies:
+
+  * the new `d0.entries` depends on the creation of the new inode
+
+Pending ops:
+
+  * the state: the creation of the new inode
+  * `d0.entries`: modification, depends on creation of new inode
+
+Atomicity: single atomic op ; the creation of the new inode might conceivably be separate from the link (eg resource exhaustion observed from another thread after inode allocated, but before file linked in - probably a very rarely observed event! also, we probably are quite loose on resource exhaustion, so this observed sequence could be explained by some other behaviour eg file allocated and deleted, but space not reclaimed)
+ 
+@fs_spec.ml
+
+  (* FIXME assumes name doesn't exist; otherwise leave as is FIXME at moment it overwrites *)
+
+  let touch s0 (d0_ref,d0) name = (
+    let (s0,(i0_ref,i0)) = new_inode s0 in
+    (* link i0 into d0 *)
+    let s0 = internal_link_file s0 (i0_ref,i0) (d0_ref,d0) name in
+    return s0)
+  let (_:state -> dir_ref * dir -> name -> ty_return2) = touch
+
+@dep.md
+### `rm`
+
+|-|-|
+|Name    |`rm`|
+|Type    |User function|
+|Function|As `unlink`|
+
+@fs_spec.ml
+
+  let rm s0 (d0_ref,d0) name = (unlink s0 (d0_ref,d0) name)
+  let (_:state -> dir_ref * dir -> name -> ty_return2) = rm
+
+@dep.md
+### `mvdir`
+
+|-|-|
+|Name    |`mvdir`                       |
+|Type    |User function|
+|Function|Move dir `d0/name0` to `d1/name1` |
+
+Dependencies:
+
+  * the `rmdir` depends on the `internal_link_dir`: the directory must be linked in before the old ref is removed
+
+Pending ops:
+
+  * `d1.dentries`: the newly linked in directory
+  * `d0.dentries`: the removal of the old directory
+
+Atomicity: 
+  
+  * on non-journalled filesystems, this is likely two atomic ops: the link into `d1` and the removal from `d0`; this may (?) produce a directory that is linked to multiple times (possibly allowing a bug: if one link is removed, and the space for the dir reclaimed, the other link may give a dangling pointer)
+
+  * on journalled filesystems, this is supposed to be atomic
+
+FIXME should not be able to mv b b/c (move a dir to a subdir) - how is this check implemented in linux?
+
+@fs_spec.ml
+
+  (* FIXME change rm and mvdir linkdir to work with files or dirs *)
+  (* cannot mvdir a b.txt; cannot mvdir a b if b is not empty *)
+  (* FIXME name0 maynot be dir, may not exist FIXME check all uses of dest_dir_ref_entry *)
+  (* note doesn't check status of name1 - just does the link *)
+  let mvdir s0 (d0_ref,d0) name0 (d1_ref,d1) name1 = (
+    let Some(entry) = resolve1 s0 (d0_ref,d0) name0 in
+    let dir_ref = dest_dir_ref_entry entry in
+    let dir = get_dir s0 dir_ref in
+    let s0 = internal_link_dir s0 (d1_ref,d1) (dir_ref,dir) name1 in
+    let s0 = internal_unlink s0 (d0_ref,d0) name0 in 
+    return s0)
+  let (_:state -> (dir_ref*dir) -> name -> (dir_ref*dir) -> name -> ty_return2) = mvdir
+
+@dep.md
+### `mv`
+
+|-|-|
+|Name    |`mv`                       |
+|Type    |User function|
+|Function|Move file `d0/name0` to `d1/name1` |
+
+Dependencies:
+
+  * the `rm` depends on the `internal_link_file`: the file must be linked in before the old ref is removed
+
+Pending ops:
+
+  * `d1.dentries`: the newly linked in file
+  * `d0.dentries`: the removal of the old file
+
+Atomicity: 
+  
+  * on non-journalled filesystems, this is likely two atomic ops: the link into `d1` and the removal from `d0`; this may (?) produce a file that is linked to multiple times
+
+  * on journalled filesystems, this is supposed to be atomic
+
+@fs_spec.ml
+
+  (* FIXME shouldn't this allow the name to be changed? similarly mvdir *)
+  (* FIXME this should not allow the same file to be moved to itself - the following code deletes the file! also mvdir *)
+  (* FIXME mv -T a.txt d fails if d is a dir, with mv: cannot overwrite directory d with non-directory... even if d is non-empty; but this happens in the user level mv, so may be allowed at syscall? *)
+
+  let mv s0 (d0_ref,d0) name0 (d1_ref,d1) name1 = (
+    let Some(entry) = resolve1 s0 (d0_ref,d0) name0 in
+    let inode_ref = dest_inode_ref_entry entry in
+    let inode = get_inode s0 inode_ref in
+    let s0 = internal_link_file s0 (inode_ref,inode) (d1_ref,d1) name1 in
+    let s0 = internal_unlink s0 (d0_ref,d0) name0 in 
+    return s0)
+  let (_:state -> (dir_ref*dir) -> name -> (dir_ref*dir) -> name -> ty_return2) = mv
+
+
+@dep.md
+### `write`
+
+|-|-|
+|Name    |`write`                       |
+|Type    |User function|
+|Function|Write string `s` to file `i`|
+
+Dependencies:
+
+  * in the no-crash scenario, two non-overlapping writes to a file can be reordered, giving the same result; in the crash scenario, it is just about possible that applications depend on the order of writes being maintained (but presumably this is highly unlikely, since POSIX is presumably quiet on the matter)
+
+
+Pending ops:
+
+Atomicity: 
+
+@fs_spec.ml
+
+  (* FIXME obviously we need to support writing at points in the file etc *)
+  let write s0 (i0_ref,i0) c = (
+    let s0 = update_inds_some s0 (i0_ref,{i0 with fcontents=c}) in
+    return s0)
+  let (_:state -> (inode_ref * inode) -> bytes -> ty_return2) = write
+
+@dep.md
+### `read`
+
+|-|-|
+|Name    |`read`                       |
+|Type    |User function|
+|Function|Read a string from file|
+
+Dependencies:
+
+
+Pending ops:
+
+Atomicity: 
+
+@fs_spec.ml
+
+  (* FIXME obviously we need to support writing at points in the file etc *)
+
+  (* FIXME read should not return an option - there is always some data by wellformedness *)
+  (*
+  let read s0 c_ref = (Contents_map.find2 c_ref s0.contents)
+  let (_:state -> file_contents_ref -> bytes option) = read
+
+  let read_all s0 (i0_ref,i) = (
+    let c_ref = i.fcontents in
+    let bs = read s0 c_ref in (* FIXME wellformedness? *)
+    bs)
+  let (_:state -> (inode_ref * inode) -> bytes option) = read_all  
+  *)
+
+  (* FIXME we assume that the bytes are in the map for valid i, don't need option *)
+  let read s0 (i0_ref,i0) = (
+    let bytes = i0.fcontents in
+    {state2=s0; ret2=(Bytes1 bytes)})
+  let (_:state -> (inode_ref * inode) -> ty_return2) = read
+
+@FIXME dep.md
+### `cp` (FIXME cp and cpdir have not been altered to take ty_return2)
+
+|-|-|
+|Name    |`cp`                       |
+|Type    |User function|
+|Function|Copy file `i0` to `d1/name1`|
+
+Dependencies:
+
+  * the `internal_link_file` depends on `clone_inode`
+  * the `clone_inode` depends on allocating a new inode
+  * (with proper inodes) allocating a new inode depends on allocating contents
+
+Pending ops:
+
+  * `d1.dentries`: the newly linked in copy of the file
+
+Atomicity: a single atomic op
+
+@FIXME fs_spec.ml
+
+  (* this is the spec level, so we have no notion that entries are cow; where does this come in? in the impl, we implement cpdir differently, but force that changes to entries result in a cow entries *)
+  (* copy d0 to d1 under name; create new dir, pointing to new entries; in the impl we do something special *)
+  (* similarly when copying a file, we do something special;  *)
+  (* the fact that dentries_ref and content_ref are not user visible is the key to doing clever optimizations such as cow; the interface to the spec must be independent of dentries_ref and content_ref *)
+  (* we are allowing update in place for dentries and file cotents, at the spec level *)
+  (* probably cpdir is a user-level application, which is optimized by the impl, via special user-level ops provided by the kernel - and this ties in with the gnu cp code, which is special cased for cow systems? *)
+
+  (* copy, make changes to s0, and return new *)
+  let clone_inode s0 (i0_ref,i0) = (
+    let clone_inode = fun i -> i in 
+    let i1 = clone_inode i0 in
+    let i1_ref = new_inode_ref s0 in
+    let s0 = update_inodes s0 i1_ref (Some i1) in
+    (s0,(i1_ref,i1)))
+
+  (* copy a file name0 in d0 as name1 in d1 *)
+  (* FIXME at the moment this copy is like making a link on the contents of the file *)
+  let cp s0 (i0_ref,i0) (d1_ref,d1) name1 = (
+    let (s0,(i1_ref,i1)) = clone_inode s0 (i0_ref,i0) in
+    let s0 = internal_link_file s0 (i1_ref,i1) (d1_ref,d1) name1 in
+    s0)
+  let (_:state -> (inode_ref * inode) -> (dir_ref * dir) -> name -> state) = cp
+  
+  (* these are the "specifications" of the cp commands, which we optimize in the impl via cow *)
+
+@FIXME dep.md
+### `cpdir`
+
+|-|-|
+|Name    |`cpdir` aka `snapshot`|
+|Type    |User function, special filesystems only|
+|Function|Copy dir `d0` to `d1/name1`|
+
+Note: of course, `cp -R` is a userland operation; this is a different operation, supplied by some COW filesystems as "snapshot"; this operation attempts to model special filesystems that atomically either copy the whole directory or not (even at the on-disk level)
+
+Dependencies:
+
+  * the `internal_link_dir` depends on all the actions in `clone_dir`; within `clone_dir`, we don't have to track dependencies, since they are not visible until the directory is linked in (what about new allocations?)
+
+Pending ops:
+
+  * `d1.dentries`: the newly linked in copy of the directory
+
+Atomicity: a single atomic op? if we dereference the entire directory at a single point in time, this may cause other operations to queue; so it might be better to do this in stages; but really this is a spec of a complex op for a cow filesystem where cpdir is supposed to appear atomic; likely we can't implement this easily without blocking other ops
+
+@FIXME fs_spec.ml
+    
+  (* produce a clone of d0, present in s0 *)
+  let rec clone_dir s0 (d0_ref,d0) = (
+    let eref0 = d0.dentries in
+    let es0 = get_entries s0 eref0 in
+    let (s0,(eref1,es1)) = clone_entries s0 (eref0,es0) in
+    let d1_ref = new_dir_ref s0 in
+    let d1 = { dentries=eref1 } in
+    let s0 = update_dirs s0 d1_ref (Some d1) in
+    (s0,(d1_ref,d1)))
+  and clone_entries s0 (ref0,es0) = (
+    let es1 = Entries.empty in
+    let ref1 = new_entries_ref s0 in
+    let s0 = update_entries s0 ref1 (Some es1) in
+    let binds = Entries.bindings es0 in
+    let f1 s0 (name,Some v) = (
+      if (is_dir_ref_entry v) then 
+        let ref = dest_dir_ref_entry v in
+        let (s0,(ref',d')) = clone_dir s0 (ref,get_dir s0 ref) in
+        let s0 = update_ents_pointwise s0 ref1 name (Some(Inl(ref'))) in
+        s0
+      else
+        let ref = dest_inode_ref_entry v in
+        let (s0,(ref',f')) = clone_inode s0 (ref,get_inode s0 ref) in
+        let s0 = update_ents_pointwise s0 ref1 name (Some(Inr(ref'))) in
+        s0)
+    in
+    let s0 = List.fold_left f1 s0 binds in
+    (s0,(ref1,es1)))
+  let (_:state -> (dir_ref * dir) -> (state * (dir_ref * dir))) = clone_dir
+  let (_:state -> (entries_ref * Entries.ty_map) -> (state * (entries_ref * Entries.ty_map))) = clone_entries
+      
+  let cpdir s0 (d0_ref,d0) (d1_ref,d1) name1 = (
+    let (s0,(d_ref,d)) = clone_dir s0 (d0_ref,d0) in
+    let s0 = internal_link_dir s0 (d1_ref,d1) (d_ref,d) name1 in
+    s0)
+  let (_:state -> (dir_ref * dir) -> (dir_ref * dir) -> name -> state) = cpdir
+
+@fs_spec.ml
+
+end
+
+
+
+@fs_spec.md
+## Resolve names
+
+We want to take a string such as `/x/y/z/d/` and process it:
+
+  * extract the components 
+  * record whether the string starts in / (* but maybe vfs ensures all strings start in / *)
+  * record whether the string ends in /
+  * process the string (against the current state) to remove .. and . (providing entries exist; if not return ENOENT; function remove_dot_dotdot)
+  * then compare result with the current state to determine whether the string
+      (1) ends with a / and matches a dir
+      (2) ends with a / and matches a file (error)
+      (3) doesn't end with a slash and matches a file or dir
+      (4) ends with a slash or not, and doesn't match anything
+
+Proposed processing of last step: Ignoring trailing slash, do we match or not? Yes - check agreement with trailing slash (1) and (2) and (3). No - (4)
+
+@fs_spec.ml
+
+module Resolve = struct
+ 
+  open Prelude
+  open Fs_types
+  open Lift
+  open Fs_ops1
+
+  (* preliminary processing of ns; drop empty components and "." components, and resolve ".." *)
+  (* idempotent *)
+  (* FIXME this is only OK if the e.g. d/../x/y/z we have that d exists FIXME do not use! *)
+  let process_dot_dotdot ns = (
+    let ns = List.filter (fun n -> not (n="" || n = ".")) ns in
+    let f1 sofar n = (if (n=".." && sofar <> []) then (List.tl sofar) else (sofar@[n])) in
+    let ns = List.fold_left f1 [] ns in
+    ns)
+  let (_:name list -> name list) = process_dot_dotdot  
+
+  (* resolve ns, return a (dir_ref,dir) *)
+  let resolve_dir_ref s0 ns = (
+    let ns = process_dot_dotdot ns in
+    (* sofar is the (dir_ref,dir) we currently got to; starts off as the root *)
+    let rec f1 sofar ns = (match ns with 
+      | [] -> (Some sofar)
+      | n::ns -> (
+        (* FIXME following should return None if lookup fails; FIXME option monad would make this more readable *)
+        let m = (snd sofar).dentries in
+        match (Entries.find2 n m) with | None -> None | Some entry -> 
+        match is_dir_ref_entry entry with | false -> None | true ->
+        let dir_ref = dest_dir_ref_entry entry in 
+        let Some(dir) = lookup_dir s0 dir_ref in (* wellformedness, shouldn't fail *)
+        f1 (dir_ref,dir) ns))
+    in
+    f1 root ns)
+  let (_:state -> name list -> (dir_ref * dir) option) = resolve_dir_ref
+
+  let dir_exists s0 ns = (resolve_dir_ref s0 ns <> None)
+
+  (* ns cannot be empty *)
+  let resolve_inode_ref s0 ns = (
+    let ns = process_dot_dotdot ns in
+    let r = resolve_dir_ref s0 (butlast ns) in
+    if r=None then None else
+    let (dir_ref,dir) = dest_Some r in
+    let n = last ns in
+    let m = dir.dentries in
+    match (Entries.find2 n m) with | None -> None | Some entry -> 
+    match is_inode_ref_entry entry with | false -> None | true -> 
+    let inode_ref = dest_inode_ref_entry entry in (* assume a file *)
+    let Some(inode) = lookup_inode s0 inode_ref in (* wellformedness, can't fail *)
+    Some(inode_ref,inode))
+  let (_:state -> name list -> (inode_ref * inode) option) = resolve_inode_ref    
+
+  let file_exists s0 ns = (resolve_inode_ref s0 ns <> None)
+
+  (* assumes path starts with '/'; throws an exception if not; FIXME do we always know the path starts with '/'? *)
+
+  (* take a string, get components and whether ends in slash *)
+  let process_path1 path = (
+    let p = explode path in
+    if p = [] then failwith "process_path1: empty path" else
+    if List.hd p <> "/" then failwith "process_path: doesn't start with /" else
+    let p = List.tl p in
+    let f1 (ns,cur) c = (if c="/" then (ns@[cur],"") else (ns,cur^c)) in
+    let (ns,cur) = List.fold_left f1 ([],"") p in
+    let ends_with_slash = (cur="") in
+    let ns = (if ends_with_slash then ns else ns@[cur]) in
+    { ns2=ns; ends_with_slash2=ends_with_slash })
+  let (_:string -> ty_name_list2) = process_path1
+
+  (* take a state and a ty_name_list2, and check if name exists in state *)
+  let process_path2 s0 ns = (
+    match ns.ends_with_slash2 with 
+    | true -> (
+      let opt = resolve_dir_ref s0 ns.ns2 in
+      match opt with 
+      | Some(dir_ref,dir) -> Dname2((dir_ref,dir),ns)
+      | None -> (
+        let opt = resolve_inode_ref s0 ns.ns2 in 
+        match opt with
+        | None -> None2 ns
+          (* following case, ns ends with a slash, but resolves to a file *)
+        | Some(iref,i) -> Err2((iref,i),ns))) 
+    | false -> (
+      let opt = resolve_dir_ref s0 ns.ns2 in
+      match opt with
+      | Some(dir_ref,dir) -> Dname2((dir_ref,dir),ns)
+      | None -> (
+        let opt = resolve_inode_ref s0 ns.ns2 in
+        match opt with 
+        | Some(iref,i) -> Fname2((iref,i),ns)
+        | None -> None2 ns)))
+  let (_:state -> ty_name_list2 -> rname2) = process_path2
+
+  (* guarantees: returns option of Fname or Dname  *)
+  (* FIXME here or in ops parser, may want to drop empty components, resolve . and .. components etc *)
+  let process_path s0 path = (
+    let rpath1 = process_path1 path in
+    let rpath2 = process_path2 s0 rpath1 in
+    rpath2)  
+  let (_:state -> string -> rname2) = process_path
+
+end
+
+@fs_spec.md
+## `Fs_ops2`
+
+Fs ops is very precise about what each argument is expected to be. Dirnames start and end in `/`. Filenames must not end in `/`. We don't check that the target of a `mv` is empty, or doesn't exist etc. However, at the command line, there is some ambiguity:
+
+  * assuming `tmp.txt` is a file, then `mv tmp.txt d` will treat `d` as a file (if no d exists), or as a dir (if d exists and is a dir)
+
+  * `mv tmp.txt d/` will treat `d/` as a dir always
+
+So some possible sources of ambiguity are:
+ 
+  * is `tmp.txt` a file or a directory? (if it exists, then it is whatever it is)
+
+  * if we mean a dir, we can add a '/', and this makes clear what we mean; if we don't add a '/' then the fs may not know whether we intend a file or directory
+
+  * even if we are clear that we mean a dir, there can be multiple interpretations: `mv c/ e/` renames c to e, providing e doesn't already exist; if e does exist, then c goes into e
+
+  * `mv c/ e/` will overwrite a directory `e/c` if `e/c` is empty; will fail if `e/c` is not empty
+
+At the user level, there is some extra logic which makes commands behave differently eg if the target is absent, or a file, or a directory eg for the command `mv src dst`
+
+  * if src is a file, and dst is a dir, then src is moved into dir
+
+  * if src if a file and dst is a file, then src is moved over dst (dst is unlinked)
+
+  * if src is a dir and dst is a dir, then 
+
+Some criteria: 
+
+  * src,dst ends in '/'
+
+  * src,dst exists/not exists  (but how to connect name to entity? the point is that this connection is heuristic in some sense; proposal: given a fordname, check whether a dir exists with that name; if not, attempt to interpret as file)
+
+  * src,dst exists and is a file/ is a dir
+
+
+Proposed `mv` processing stages:
+
+ 1. if either src or dst is fordname (no trailing /) then try to disambiguate: if directory src exists, then src is a dirname, otherwise filename; from this point onwards, we use "src" to indicate a filename, and "src/" to indicate a dirname
+
+    `mv src dst/`: move file src to dst directory; if src doesn't exist, fail; if dst directory doesn't exist, fail
+
+    `mv src/ dst`: move directory src to directory dst; dst directory doesn't exist by disambiguation (otherwise the command would have been interpreted as `mv src/ dst/`); fail if src doesn't exist
+
+    `mv src dst`: move file src to file dst; if src doesn't exist, fail
+
+    `mv src/ dst/`: if `dst` exists, then attempt to move dir src to a subdirectory of dst; if `dst/src` file exists, overwrite; if `dst/src` dir exists, and is empty, then do the move, otherwise fail
+
+
+Note: these options don't even include checking whether src and dst are soft links (which further complicates matters; FIXME we don't deal with soft links at this stage)
+
+For the moment, we content ourselves with the following horrible code...
+
+For `Fs_ops2` we provide functions from state to Inl of state * err, or Inr of state * ret
+
+@fs_spec.ml
+
+(* FIXME these work in terms of rnames; assumes no Err2 *)
+module Fs_ops2 = struct
+  
+  open Unix (* for st_dev record fields etc *)
+  open LargeFile (* FIXME include stats in Fs_types? *)
+
+  open Prelude
+  open Fs_types
+  open Fs_ops1
+  open Resolve
+
+  type error = Fs_types.error
+  type 'a ty_return3 = (state * error, state * 'a) sum
+  (* vars u, v used eg for Mymonad u *)
+  type 'a mymonad = Mymonad of (state -> 'a ty_return3)
+  let dest_mymonad (Mymonad u) = u
+  let return x = Mymonad (fun s -> Inr(s,x))
+  let (_:'a -> 'a mymonad) = return
+
+  let bind u f = Mymonad (fun s ->
+    let u = dest_mymonad u in
+    let r = u s in
+    match r with
+    | Inl x -> (Inl x)
+    | Inr (s,x) -> (
+      let v = dest_mymonad (f x) in
+      v s))
+  let (_: 'a mymonad -> ('a -> 'b mymonad) -> 'b mymonad) = bind
+
+  let ( >>= ) = bind
+  
+  let get_state = Mymonad (fun s -> Inr(s,s))
+  let put_state s0 = Mymonad (fun s -> Inr(s,None1))
+  let myraise e = Mymonad (fun s -> Inl(s,e))
+
+  let run_mymonad (Mymonad f) s = (f s)
+
+  (*
+  let file_exists (s0:state) ns = Resolve.file_exists s0 ns
+
+  let dir_exists (s0:state) ns = Resolve.file_exists s0 ns
+  *)
+
+  let is_empty_dir (s0:state) ns = failwith "FIXME"
+
+  let default_stats = {
+    st_dev = 2049; (* device number FIXME 0? *)
+    st_ino = 999; (* inode number FIXME change this for particular file etc *)
+    st_kind = Unix.S_DIR; (* FIXME *)
+    st_perm = 0o777; (* ugo+rwx *)
+    st_nlink = 2; (* FIXME dummy - for dir should be number of entries + 2 *)
+    st_uid = 1000; (* FIXME 0? *)
+    st_gid = 1000; 
+    st_rdev = 0; (* device minor number *)
+    st_size = 4096L; (* FIXME dummy *)
+    st_atime = 0.;
+    st_mtime = 0.;
+    st_ctime = 0.
+  }
+
+  let default_file_stats s0 (i0_ref,i0) = { default_stats with
+    st_ino=(dest_inode_ref i0_ref);
+    st_kind=Unix.S_REG;
+    st_size=(
+      let bs = dest_bytes1 ((Fs_ops1.read s0 (i0_ref,i0)).ret2) in
+      (Int64.of_int (MyDynArray.dim bs)))
+  }
+ 
+  let default_dir_stats (d0_ref,d0) = { default_stats with
+    st_ino=(dest_dir_ref d0_ref);
+    st_kind=Unix.S_DIR;
+    st_size=4096L; (* seems to be default on my system - but changes depending on number of entries? *)
+  }
+
+  (* FIXME surely a lot of this complexity is because this is the user land behaviour of the mv command - but we want to target the syscall interface *)
+  (* FIXME we probably want the containing dirs as well, when doing rename; put this in resolve *)
+  let rename rsrc rdst = (
+    get_state >>= (fun s0 -> 
+    match rsrc with
+    | None2 _ -> (myraise ENOENT) (* no src file *)
+    | Fname2 ((i0_ref,i0),ns_src) -> (
+      (* file exists *)
+      match rdst with 
+      | None2 ns_dst -> (
+        (* do the move; there is no file ns_dst *)
+        (* FIXME check rename to target where parent doesn't exist *)
+        let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) in
+        match resolve_dir_ref s0 (butlast ns_dst.ns2) with
+        | None -> (myraise ENOENT) (* parent dir of dst doesn't exist *)
+        | Some(d1_ref,d1) -> (
+          put_state (Fs_ops1.mv s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2))))
+      | Fname2 (_,ns_dst) -> (
+        (* do the move; there is a file name ns_dst *)
+        let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) in
+        let Some(d1_ref,d1) = resolve_dir_ref s0 (butlast ns_dst.ns2) in
+        put_state (Fs_ops1.mv s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2)))
+        (* FIXME may want to have putstate return a void value *)
+      | Dname2 ((d0_ref,d0),ns_dst) -> (myraise EISDIR)) (* FIXME test this *)
+    | Dname2 (_,ns_src) -> (
+      (* directory exists *)
+      match rdst with
+      | None2 ns_dst -> (
+        (* do the move; there is no file ns_dst *)
+        let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) in
+        match resolve_dir_ref s0 (butlast ns_dst.ns2) with
+        | None -> (myraise ENOENT) (* parent dir of dst doesn't exist *)
+        | Some(d1_ref,d1) -> (
+          put_state (Fs_ops1.mvdir s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2))))
+      | Fname2 (_,ns_dst) -> (myraise ENOTDIR)
+      | Dname2 (_,ns_dst) -> (
+        (* FIXME check if dir not empty *)
+        if (false) then (myraise ENOTEMPTY) else
+        (* FIXME check if renaming to a subdir *)
+        if (false) then (myraise EINVAL) else
+        (* otherwise target dir is empty; do rename *)
+        let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) in
+        let Some(d1_ref,d1) = resolve_dir_ref s0 (butlast ns_dst.ns2) in
+        put_state (Fs_ops1.mvdir s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2))))))
+  let (_:rname2 -> rname2 -> ret_value mymonad) = rename      
+
+  (* NB doesn't include . and .. *)
+  let readdir rname2 = (
+    get_state >>= (fun s0 -> (
+    match rname2 with 
+    | None2 _ -> (myraise ENOENT) (* (raise (Unix_error (ENOENT,"readdir","/FIXMEreaddir"))) (* FIXME we may need access to the underlying path that was given by the user *) *)
+    | Fname2 _ -> (myraise ENOTDIR) (* (raise (Unix_error (ENOTDIR,"readdir","/FIXMEreaddir"))) *)
+    | Dname2((d0_ref,d0),ns) -> (
+      let es0 = d0.dentries in
+      let binds = Entries.bindings es0 in
+      return (Names1 (List.map fst binds))))))
+  let (_:rname2 -> ret_value mymonad) = readdir
+  (* NB later we may want to also return a state, given access times can cause changes when reading etc *)
+
+  let stat rname2 = (
+    get_state >>= (fun s0 -> (
+    let _ = (print_endline ("stat: "^(string_of_rname2 rname2))) in
+    match rname2 with
+    | None2 _ -> (myraise ENOENT)  (* (raise (Unix_error (ENOENT,"stat","/FIXMEstat"))) *)
+    | Fname2((i0_ref,i0),ns) -> (return (Stats1 (default_file_stats s0 (i0_ref,i0))))
+    | Dname2((d0_ref,d0),ns) -> (return (Stats1 (default_dir_stats (d0_ref,d0)))))))
+  let (_:rname2 -> ret_value mymonad) = stat
+
+  (* FIXME the real spec would allow reading less than all the bytes *)
+  let read rname2 ofs len = (
+    get_state >>= (fun s0 -> (
+    match rname2 with 
+    | None2 _ -> (myraise ENOENT) (* (raise (Unix_error (ENOENT,"read","/FIXMEread"))) *)
+    | Dname2(_,_) -> (myraise ENOENT) (* (raise (Unix_error (ENOENT,"read","/FIXMEread"))) *)
+    | Fname2((i0_ref,i0),ns) -> (
+      let r = Fs_ops1.read s0 (i0_ref,i0) in (* FIXME Fs_ops1 may have to take an offset too *)
+      (put_state r.state2) >>= (fun _ -> (
+      let bs = dest_bytes1 r.ret2 in
+      let bs' = MyDynArray.sub bs ofs len in
+      return (Bytes1(bs'))))))))
+  let (_:rname2 -> int -> int -> ret_value mymonad) = read
+
+  (* FIXME we need to make this take an offset in order to be usable, also read *)
+  (* FIXME the real spec would allow writing less than all the bytes *)
+  let write rname2 ofs bs len = (
+    get_state >>= fun s0 -> 
+    match rname2 with 
+    | None2 _ -> (myraise ENOENT) (* (raise (Unix_error (ENOENT,"read","/FIXMEwrite"))) *)
+    | Dname2(_,_) -> (myraise ENOENT) (* (raise (Unix_error (ENOENT,"read","/FIXMEwrite"))) *)
+    | Fname2((i0_ref,i0),ns) -> (
+      let r = Fs_ops1.read s0 (i0_ref,i0) in
+      put_state r.state2 >>= fun _ -> 
+      let bs' = dest_bytes1 r.ret2 in
+      (* want to create a new array from bs' and bs *)
+      let bs'' = MyDynArray.write bs' ofs bs 0 len in
+      return (Bytes1(bs''))))
+  let (_:rname2 -> int -> file_contents -> int -> ret_value mymonad) = write
+
+  let truncate rpath len = (
+    get_state >>= fun s0 ->
+    match rpath with 
+    | None2 _ -> (myraise ENOENT)
+    | Dname2(_,_) -> (myraise EISDIR) (* FIXME check error messages are sensible *)
+    | Fname2((i0_ref,i0),ns) -> (
+      let r = Fs_ops1.read s0 (i0_ref,i0) in
+      let bs = dest_bytes1 r.ret2 in
+      (* create a new array, of length len, with same contents *)
+      let bs' = MyDynArray.resize bs len in
+      let s0 = Fs_ops1.write s0 (i0_ref,i0) bs' in
+      put_state s0))
+  let (_:rname2 -> int -> ret_value mymonad) = truncate
+
+  let open_create rpath = (
+    get_state >>= fun s0 ->
+    match rpath with 
+    | Dname2(_,_) -> (myraise EEXIST) 
+    | Fname2(_,_) -> (myraise EEXIST)
+    | None2 ns -> (
+      (* FIXME for us, open_create should only create files *)
+      if ns.ends_with_slash2 then (myraise EISDIR) else 
+      (* maybe we are trying to create a file "" ie path was empty *)
+      if ns.ns2 = [] then (myraise ENOENT) else
+      (* FIXME need to look at mode *)
+      let dname = butlast ns.ns2 in
+      let fname = last ns.ns2 in
+      let dpath = process_path2 s0 { ns2=dname; ends_with_slash2=false } in
+      match dpath with
+      | Dname2((d0_ref,d0),ns) -> (
+        (* FIXME assume dir exists; otherwise FIXME we should throw ENOENT *)
+        let Some(d0_ref,d0) = resolve_dir_ref s0 dname in
+        let s0 = Fs_ops1.touch s0 (d0_ref,d0) fname in
+        put_state s0)
+      | Fname2(_,_) -> (myraise ENOTDIR)
+      | _ -> (myraise ENOENT)))
+  let (_:rname2 -> ret_value mymonad) = open_create
+
+  let unlink rpath = (
+    get_state >>= fun s0 ->
+    match rpath with 
+    | None2(_) -> (myraise ENOENT)
+    | Dname2(_,_) -> (myraise EISDIR)
+    | Fname2((i0_ref,i0),ns) -> (
+      (* FIXME for resolving a file, often useful to have dir ref as well *)
+      let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns.ns2) in
+      let s0 = Fs_ops1.unlink s0 (d0_ref,d0) (last ns.ns2) in
+      put_state s0))
+
+  let mkdir rpath perms = (
+    (* FIXME deal with perms *)
+    get_state >>= fun s0 ->
+    match rpath with 
+    | None2(ns) -> (
+      let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns.ns2) in
+      let s0 = Fs_ops1.mkdir s0 (d0_ref,d0) (last ns.ns2) in
+      put_state s0)
+    | Dname2(_,_) -> (myraise EEXIST)
+    | Fname2(_,_) -> (myraise EEXIST))
+
+  let link spath dpath = (
+    get_state >>= fun s0 ->
+    match spath with 
+    | Fname2((i0_ref,i0),ns_src)  -> (
+      match dpath with 
+      | None2 ns_dst -> (
+        let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_dst.ns2) in
+        let s0 = link_file s0 (i0_ref,i0) (d0_ref,d0) (last ns_dst.ns2) in
+        put_state s0)
+      | _ -> (myraise EEXIST))
+    | _ -> (myraise ENOENT))
+
+  let rmdir rpath = (
+    get_state >>= fun s0 ->
+    match rpath with 
+    | Dname2(_,ns) -> (
+      (* FIXME for resolving a file, often useful to have dir ref as well *)
+      let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns.ns2) in
+      let s0 = Fs_ops1.unlink s0 (d0_ref,d0) (last ns.ns2) in
+      put_state s0)
+    | Fname2 _ -> (myraise ENOTDIR)
+    | None2 _ -> (myraise ENOENT))
+
+
+end
+
+@fs_spec.md
+## `Fs_ops3`
+
+This works in terms of strings; handles Err2 on resolving 
+
+@fs_spec.ml
+
+module Fs_ops3 = struct 
+
+  open Fs_types
+  open Resolve
+  open Fs_ops2
+
+
+  let link src dst = (
+    get_state >>= fun s0 -> 
+    let rsrc = process_path s0 src in
+    let rdst = process_path s0 dst in
+    if (is_Err2 rsrc || is_Err2 rdst) then (myraise ENOTDIR) else Fs_ops2.link rsrc rdst)
+
+  let mkdir path perms = (
+    get_state >>= fun s0 ->
+    let rpath = process_path s0 path in
+    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.mkdir rpath perms)
+
+  (* FIXME we have to take care of flags eg O_TRUNC *)
+  (* FIXME return is int option - meaning optional file handle? *)
+  (* FIXME why is this called fopen (taking an fd?) rather than open? *)
+  (* FIXME the mapping between fds and files is handled elsewhere - needs a new part of spec *)
+  let _open path flags = (
+    get_state >>= fun s0 ->
+    let rpath = process_path s0 path in
+    match rpath with
+    | None2 _ -> (myraise ENOENT)
+    | Dname2(_,_) -> (myraise ENOENT) (* FIXME? can we open a dir? *)
+    | _ -> (return None1))
+  let (_:string -> 'a -> ret_value mymonad) = _open
+ 
+  (* open call returns an fd; but may have side effects; open create is one such call; FIXME what are others? *)
+  let open_create path = (
+    get_state >>= fun s0 ->
+    let rpath = process_path s0 path in
+    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.open_create rpath)
+
+  (* N.B. for read and write ofs is associated with fd, so presumably < len of file *)
+  let read path ofs len = (
+    get_state >>= fun s0 ->
+    let rpath = process_path s0 path in
+    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.read rpath ofs len)
+  
+  let readdir path = (
+    get_state >>= fun s0 ->
+    let rpath = process_path s0 path in
+    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.readdir rpath)
+
+  (* FIXME check do_rename against ops2.rename; also check against doc in linux sys programming *)
+  let rename src dst = (
+    get_state >>= fun s0 -> 
+    let rsrc = process_path s0 src in
+    let rdst = process_path s0 dst in
+    if (is_Err2 rsrc || is_Err2 rdst) then (myraise ENOTDIR) else Fs_ops2.rename rsrc rdst)
+  let (_:string -> string -> ret_value mymonad) = rename
+
+  let rmdir path = (
+    get_state >>= fun s0 ->
+    let rpath = process_path s0 path in
+    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.rmdir rpath)
+
+  let stat path = (
+    get_state >>= fun s0 ->
+    let rpath = process_path s0 path in
+    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.stat rpath)
+
+  let truncate path len = (
+    get_state >>= fun s0 ->
+    let rpath = process_path s0 path in
+    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.truncate rpath len)
+
+  let unlink path = (
+    get_state >>= fun s0 ->
+    let rpath = process_path s0 path in
+    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.unlink rpath)
+
+  let write path ofs bs len = (
+    get_state >>= fun s0 ->
+    let rpath = process_path s0 path in
+    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.write rpath ofs bs len)
+
+
+end
+
+
+@fs_spec.md
+## Transition system
+
+The model is of a labelled transition system from state to state, but
+where each transition may result in a return to userland (of a value
+or an error). FIXME need to be non-determinisitic eg in write and read
+behaviour.
+
+@fs_spec.ml
+
+module Transition_system = struct
+
+  open Prelude 
+  open Fs_types
+  open Fs_ops2
+  open Fs_ops3
+
+  (* the transition function takes a state, a label, and returns an updated state with a possible value returned, or an error *)
+  let trans s0 lbl = (
+    let m = (match lbl with 
+      | LINK (s,d) -> (link s d)
+      | MKDIR (s,p) -> (mkdir s p)
+      | OPEN (p,fs) -> (_open p fs)
+      | READ (p,i,j) -> (read p i j)
+      | READDIR p -> (readdir p)
+      | RENAME (s,d) -> (rename s d)
+      | RMDIR p -> (rmdir p)
+      | STAT p -> (stat p)
+      | TRUNCATE (p,l) -> (truncate p l)
+      | UNLINK p -> (unlink p)
+      | WRITE (p,ofs,bs,len) -> (write p ofs bs len))
+    in
+    let r = run_mymonad m s0 in
+    let (s,v) = (match r with 
+      | Inl(s,e) -> (s,Inl e)
+      | Inr(s,v) -> (s,Inr v))
+    in
+    (s,v))
+  let (_:state -> ty_label -> (state * (error,ret_value)sum)) = trans
+  
+end
+
+
+@FIXME move? fs_spec.md
+## TODO Ops printer
+
+We want to print filesystem operations as plain text, so that we can replay them easily. Particularly, we want to replay the writes.
+
+Problem with doing this in ocaml is that we can't easily reconstruct partial disk images just using the command line. There is a command line tool base64 on linux, which looks good. 
+
+Batteries included has a Base64 module with the right methods for encode and decode. Need to check that this is in sync with the linux base64 implementation. This needs BatIO module.
+
+Could probably take this module and write our own. The slightly tricky bit is if the input isn't a multiple of 8 bytes. The code in the bat module is quite tricky here.
+
+
+
+@FIXME move? fs_spec.md
+## Opsparser2
+
+`cmdline_of_op`: Our ops are quite precise about which things are files, directories, etc; here we map to eg a bash script that can be executed on a standard fs. Because the command line tries hard to do execute the command if it can, the results aren't guaranteed to be the equivalent... we could probably improve this by having an `is_dir` and `is_file` test in bash; and also the OS will eg fail if attempting to move a dir over a non-empty dir, but our fs will do this
+
+@FIXME fs_spec.ml
+
+module Opsparser2 = struct
+
+  open Prelude
+  open Fs_types
+  open Fs_ops1
+  open Resolve
+  
+  let fn_of_op op = (
+    (match op with
+      | LN(fn,dn,n) -> (fun s0 -> link_file s0 (dest_Some (resolve_inode_ref s0 fn)) (dest_Some (resolve_dir_ref s0 dn)) n)
+      | UNLINK(dn,n) -> (fun s0 -> unlink s0 (dest_Some (resolve_dir_ref s0 dn)) n)
+      | MKDIR(dn,n) ->  (fun s0 -> mkdir s0  (dest_Some (resolve_dir_ref s0 dn)) n)
+      | RMDIR(dn,n) ->  (fun s0 -> rmdir s0  (dest_Some (resolve_dir_ref s0 dn)) n)
+      | TOUCH(dn,n) ->  (fun s0 -> touch s0  (dest_Some (resolve_dir_ref s0 dn)) n)
+      | RM(dn,n) -> (fun s0 -> rm s0 (dest_Some (resolve_dir_ref s0 dn)) n)
+      | MVDIR(dn1,n1,dn2,n2) -> (fun s0 -> mvdir s0 (dest_Some (resolve_dir_ref s0 dn1)) n1 (dest_Some (resolve_dir_ref s0 dn2)) n2)
+      | MV(dn1,n1,dn2,n2) -> (fun s0 -> mv s0 (dest_Some (resolve_dir_ref s0 dn1)) n1 (dest_Some (resolve_dir_ref s0 dn2)) n2)
+      | CP(fn,dn,n) -> (fun s0 -> cp s0 (dest_Some (resolve_inode_ref s0 fn)) (dest_Some (resolve_dir_ref s0 dn)) n)
+      | CPDIR(dn1,dn2,n) -> (fun s0 -> cpdir s0 (dest_Some (resolve_dir_ref s0 dn1)) (dest_Some (resolve_dir_ref s0 dn2)) n)
+      | WRITE(fn,s) -> (fun s0 -> write s0 (dest_Some (resolve_inode_ref s0 fn)) (MyDynArray.of_string s))
+      | WRITE64(fn,off,s) -> (fun s0 -> write s0 (dest_Some (resolve_inode_ref s0 fn)) (MyDynArray.of_string (Encode.decode_string s)))
+    ))
+  
+  (* we want a list, where each entry is a pair of a command, a number, and the state that resulted from running the command *)
+  let thrd (x,y,z) = z
+  let process_ops ops = List.fold_left 
+    (fun xs -> fun op -> xs@[(List.length xs,op,fn_of_op op (thrd (last xs)))]) 
+    [(0,UNLINK([],""),state0)]
+    ops
+
+  let cmdline_of_op op = (
+    let string_of_fn fn = "/"^(String.concat "/" fn) in
+    let string_of_dn dn = "/"^(String.concat "/" dn)^"/" in
+    (match op with
+      | LN(fn,dn,n) -> ("ln "^(string_of_fn fn)^" "^(string_of_fn (dn@[n])))
+      | UNLINK(dn,n) -> ("rm "^(string_of_fn (dn@[n])))
+      | MKDIR(dn,n) ->  ("mkdir "^(string_of_dn (dn@[n])))
+      | RMDIR(dn,n) ->  ("rm -rf "^(string_of_dn (dn@[n])))
+      | TOUCH(dn,n) ->  ("touch "^(string_of_fn (dn@[n])))
+      | RM(dn,n) -> ("rm "^(string_of_fn (dn@[n])))
+      | MVDIR(dn1,n1,dn2,n2) -> ("mv "^(string_of_dn (dn1@[n1]))^" "^(string_of_dn (dn2@[n2])))
+      | MV(dn1,n1,dn2,n2) -> ("mv "^(string_of_fn (dn1@[n1]))^" "^(string_of_fn (dn2@[n2])))
+      | CP(fn,dn,n) -> ("cp "^(string_of_fn fn)^" "^(string_of_fn (dn@[n])))
+      | CPDIR(dn1,dn2,n) -> ("cp -R "^(string_of_dn dn1)^ " "^(string_of_dn (dn2@[n])))
+      | WRITE(fn,s) -> ("echo \""^s^"\" > "^(string_of_fn fn))
+      | WRITE64(fn,off,s) -> "write64 "^(string_of_fn fn)^" "^(string_of_int off)^" \""^s^"\""
+    ))
+  
+  let cmdline_of_ops ops = (String.concat "\n" (List.map cmdline_of_op ops))
+
+end
+
+@FIXME fs_spec.md
+## Fs everything
+@FIXME fs_spec.ml
+
+module FsEverything = struct
+
+  include Prelude
+  include Fs_types
+  include Lift
+  include Common
+  include Fs_ops1
+  include Resolve
+  include Fs_ops2
+  include Opsparser2
+
+end
+
+@test Fs_ops1 and Resolve
+
+open Prelude
+open Fs_types
+open Lift
+open Common
+open Fs_ops1
+open Resolve
+
+let s0 = state0
+let s0 = mkdir s0 root "tmp"
+let _ = print_endline (string_of_state s0)
+let _ = resolve_dir_ref s0 []
+let Some(tmp) = resolve_dir_ref s0 ["tmp"]
+let s0 = mkdir s0 tmp "somedir"
+let _ = print_endline (string_of_state s0)
+let Some(somedir) = resolve_dir_ref s0 ["tmp";"somedir"]
+let s0 = mkdir s0 somedir "anotherdir"
+let _ = print_endline (string_of_state s0)
+let s0 = touch s0 tmp "tmp.txt"
+let _ = print_endline (string_of_state s0)
+let s0 = touch s0 somedir "somedir.txt"
+let _ = print_endline (string_of_state s0)
+
+let s0 = write s0 (dest_Some (resolve_inode_ref s0 ["tmp";"tmp.txt"])) "hello world!"
+let _ = read s0 (dest_Some (resolve_inode_ref s0 ["tmp";"tmp.txt"]))
+let _ = read s0 (dest_Some (resolve_inode_ref s0 ["tmp";"somedir";"somedir.txt"]))
+
+let s0 = cpdir s0 somedir root "somedircopy"
+let _ = print_endline (string_of_state s0)
+
+let s0 = cp s0 (dest_Some (resolve_inode_ref s0 ["tmp";"somedir";"somedir.txt"])) tmp "somedircopy.txt"
+let _ = print_endline (string_of_state s0)
+
+let s0 = mv s0 somedir "somedir.txt" tmp "somedir.txt"
+let _ = print_endline (string_of_state s0)
+
+let s0 = mvdir s0 tmp "somedir" root "somedir"
+let _ = print_endline (string_of_state s0)
+
+
+let s0 = rmdir s0 tmp "somedir"
+let _ = print_endline (string_of_state s0)
+
+@FIXME move? myfuse.md
+# FUSE integration
+@FIXME move? myfuse.ml
+
+(* some extra myfuse.ml stuff *)
+
+(* a dummy filesystem *)
+
+open Fs
+
+module DummyFs = struct 
+
+  open FsEverything
+  open Opsparser2
+
+(*
+
+mkdir / tmp
+mkdir /tmp/ somedir
+mkdir /tmp/somedir/ anotherdir
+touch /tmp/ tmp.txt
+touch /tmp/somedir/ somedir.txt
+mvdir /tmp/ somedir / somedir
+mv /tmp/ tmp.txt /somedir/ tmp.txt
+cp /somedir/somedir.txt /tmp/ somedircopy.txt
+cpdir /somedir/ /tmp/ somedircopy
+rm /tmp/ tmp.txt
+rmdir /tmp/ somedircopy
+ln /somedir/somedir.txt /tmp/ somedirlink.txt
+write /tmp/somedirlink.txt "hello world"
+
+*)
+
+  let ops = [MKDIR ([], "tmp"); MKDIR (["tmp"], "somedir");
+     MKDIR (["tmp"; "somedir"], "anotherdir"); TOUCH (["tmp"], "tmp.txt");
+     TOUCH (["tmp"; "somedir"], "somedir.txt");
+     MVDIR (["tmp"], "somedir", [], "somedir");
+     MV (["tmp"], "tmp.txt", ["somedir"], "tmp.txt");
+     CP (["somedir"; "somedir.txt"], ["tmp"], "somedircopy.txt");
+     CPDIR (["somedir"], ["tmp"], "somedircopy"); RM (["tmp"], "tmp.txt");
+     RMDIR (["tmp"], "somedircopy");
+     LN (["somedir"; "somedir.txt"], ["tmp"], "somedirlink.txt");
+     WRITE (["tmp"; "somedirlink.txt"], "hello world")]
+  (* FIXME we probably want to do something about WRITE - we want to be able to write arbitrary binary data *)
+  
+  let tmp_states = process_ops ops
+  
+  let state0 = (thrd (List.nth tmp_states 13))
+
+  (* we also want to include the contents of file /tmp/img.fs as a file /img.fs in the dummy fs *)
+  (*
+  let state0 = Fs_ops1.touch state0 (dest_Some (resolve_dir_ref state0 [])) "img.fs"
+  let bytes = MyDynArray.of_array (read_file_as_array "/tmp/img.fs")
+  let state0 = Fs_ops2.write state0 (Fname2 ["img.fs"]) bytes
+  *)
+    
+  (* we also want to include the contents of the files in /tmp/imgs as files in /imgs *)
+  (* FIXME the below is too heavy for just making a directory imgs in state0 *)
+  let state0 = (
+    (* add imgs directory *)
+    let s0 = (fn_of_op (MKDIR(["tmp"],"imgs")) state0) in
+    (* find files in /tmp/imgs on real filesystem *)
+    let files = List.filter File_utils.is_file (File_utils.ls ["tmp";"imgs"]) in
+    (* add each of these into s0 under /tmp/imgs *)
+    let f1 file s0 = (
+      let bytes = MyDynArray.of_array (read_file_as_array (File_utils.string_of_longfname file)) in
+      let s0 = fn_of_op (TOUCH (butlast file,last file)) s0 in
+      let s0 = Fs_ops2.write s0 (Fname2 file) bytes in
+      s0)
+    in
+    let s0 = itlist f1 files s0 in
+    s0)
+  
+  
+  
+end
+
+@test dummyfs
+
+open Fs_types
+
+let s0 = DummyFs.state0
+
+let Fname2 ns1 = Resolve.process_path s0 "/somedir/somedir.txt"
+let Fname2 ns2 = Resolve.process_path s0 "/tmp/somedirlink.txt"
+
+let _ = Fs_ops2.stat s0 (Fname2 ns1)
+let _ = Fs_ops2.stat s0 (Fname2 ns2)
+
+
+@FIXME move? myfuse.ml
+
+module FuseIntegration = struct
+  
+  open Unix
+  open LargeFile
+  open Bigarray
+
+  open FsEverything
+
+  open Parse_lib
+  open Everything
+  open Opsparser2
+
+  open Fuse
+
+  (* from Fuse.ml, Fuse.buffer *)
+  type myfusebuffer = (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
+
+  let state0 = ref DummyFs.state0
+
+  let catch_exception s f = (try f () with 
+    | Unix_error _ as e -> (print_endline (s^" Unix_error"); raise e)
+    | Invalid_argument _ as e -> (print_endline (s^" Invalid_argument"); raise e)
+    | e -> (print_endline s; raise e))
+  
+  let do_getattr path = (
+    let name = process_path (!state0) path in
+    Fs_ops2.stat (!state0) name)          
+
+  (* TODO need to fix getattr to return the correct things for files and dirs *)
+  (* TODO add . and .. entries *)
+  let do_readdir path _ = (
+    let rname = process_path (!state0) path in
+    Fs_ops2.readdir (!state0) rname)
+  
+  (* FIXME we have to take care of flags eg O_TRUNC *)
+  (* FIXME return is int option - meaning optional file handle? *)
+  (* FIXME why is this called fopen (taking an fd?) rather than open? *)
+  let do_fopen path flags = (
+    let _ = print_endline ("do_fopen: "^path) in
+    let rname = process_path (!state0) path in 
+    match rname with 
+    | None2 _ -> (raise (Unix_error (ENOENT,"open",path)))
+    | Dname2 _ -> None (* FIXME? can we open a dir? *)
+    | Fname2 ns -> None) 
+  
+  let do_read path buf ofs _ = (
+    let rname = process_path (!state0) path in
+    match (Fs_ops2.read (!state0) rname) with
+    | None -> (raise (Unix_error (ENOENT,"read",path)))
+    | Some bs -> (
+      let ofs = Int64.to_int ofs in
+      let contents = bs in
+      let len = min ((MyDynArray.dim contents) - ofs) (Array1.dim buf) in
+  	  (MyDynArray.blit_array1 (contents,ofs,len) (buf,0);
+  	   len)))
+  let (_:string -> myfusebuffer -> int64 -> 'a -> int) = do_read
+  
+  (* FIXME make debugging configurable - otherwise thisis all very slow! *)
+  let do_write path buf ofs _ = catch_exception ("do_write: exception "^path) (fun () -> (
+    let ofs = Int64.to_int ofs in
+    (*
+    let data = Encode.encode_array buf in
+    let _ = print_endline ("write64 "^path^" "^(string_of_int ofs)^" \""^data^"\"") in
+    *)
+    let rname = process_path (!state0) path in
+    (* FIXME this logic is all wrong - we need to see whether the path resolves first *)
+    match (Fs_ops2.read (!state0) rname) with
+    | None -> (raise (Unix_error (ENOENT,"write",path)))
+    | Some bs -> (
+      (* replace some of the bytes, and write *)
+      let buf = MyDynArray.of_array buf in
+      let len = MyDynArray.dim buf in 
+      let bs = MyDynArray.blit (buf,0,len) (bs,ofs) in (* FIXME note that bs is being used linearly... *)
+      let s0 = Fs_ops2.write (!state0) rname bs in
+      let _ = (state0 := s0) in
+      len)))
+  let (_:string -> myfusebuffer -> int64 -> 'a -> int) = do_write
+    	   
+  let do_truncate path len = (
+    let len = Int64.to_int len in
+    let _ = print_endline ("do_truncate: "^(string_of_int len)) in
+    let s0 = !state0 in
+    let rname2 = process_path s0 path in
+    match rname2 with 
+    | None2 _ -> (raise (Unix_error (ENOENT,"truncate",path)))
+    | Dname2 _ -> (raise (Unix_error (EISDIR,"truncate",path))) (* FIXME check error messages are sensible *)
+    | Fname2 ns -> (
+      let Some(i0_ref,i0) = resolve_inode_ref s0 ns in
+      let Some bs = Fs_ops1.read s0 (i0_ref,i0) in
+      (* create a new string, of length len, with same contents *)
+      let bs' = MyDynArray.resize bs len in
+      let s0 = Fs_ops1.write s0 (i0_ref,i0) bs' in
+      let _ = (state0 := s0) in
+      ()))
+  let (_:string -> int64 -> unit) = do_truncate
+
+  (* "This is called for creation of all non-directory, non-symlink nodes" *)
+  let do_mknod path mode = (
+    let _ = print_endline ("do_mknod: "^path) in
+    let s0 = !state0 in
+    let rname2 = process_path s0 path in
+    match rname2 with 
+    | None2 ns -> (
+      (* FIXME need to look at mode *)
+      let dir_name = process_path s0 ("/" ^ (String.concat "/" (butlast ns))) in
+      match dir_name with
+      | Dname2 ns_dir -> (
+        let _ = print_endline ("do_mknod: touch") in
+        let Some(d0_ref,d0) = resolve_dir_ref s0 ns_dir in
+        let s0 = Fs_ops1.touch s0 (d0_ref,d0) (last ns) in
+        let _ = (state0 := s0) in
+        ())
+      | _ -> (raise (Unix_error (EEXIST,"mknod",path))))
+    | Dname2 _ -> (raise (Unix_error (EEXIST,"mknod",path))) 
+    | Fname2 ns -> (raise (Unix_error (EEXIST,"mknod",path))))
+  let (_:string -> int -> unit) = do_mknod
+
+  let do_unlink path = (
+    let s0 = !state0 in
+    let rname2 = process_path s0 path in 
+    match rname2 with 
+    | Fname2 ns -> (
+      (* FIXME for resolving a file, often useful to have dir ref as well *)
+      let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns) in
+      let s0 = Fs_ops1.unlink s0 (d0_ref,d0) (last ns) in
+      let _ = (state0 := s0) in
+      ())
+    | _ -> (raise (Unix_error (EEXIST,"mknod",path))))
+  let (_:string -> unit) = do_unlink
+
+  (* FIXME all this logic should be in the spec, not in the fuse layer *)
+  (* FIXME rename to subdir of self? *)
+  let do_rename src dst = (
+    let _ = (print_endline ("do_rename "^src^" "^dst)) in
+    let s0 = !state0 in
+    let rsrc = process_path s0 src in 
+    let rdst = process_path s0 dst in 
+    if (is_None2 rsrc) then (raise (Unix_error (ENOENT,"rename",src))) else
+    match rdst with 
+      | None2 ns_dst -> (
+        match rsrc with 
+        | Fname2 ns_src -> (
+          let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src) in
+          let Some(d1_ref,d1) = resolve_dir_ref s0 (butlast ns_dst) in
+          let s0 = Fs_ops1.mv s0 (d0_ref,d0) (last ns_src) (d1_ref,d1) (last ns_dst) in
+          let _ = (state0 := s0) in
+          ())
+        | Dname2 ns_src -> (
+          let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src) in
+          let Some(d1_ref,d1) = resolve_dir_ref s0 (butlast ns_dst) in
+          let s0 = Fs_ops1.mvdir s0 (d0_ref,d0) (last ns_src) (d1_ref,d1) (last ns_dst) in (* FIXME last ns_src may not ref dir *)
+          let _ = (state0 := s0) in
+          ())
+      )
+      | Fname2 ns_dst -> (
+        match rsrc with 
+        | Fname2 ns_src -> (
+          let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src) in
+          let Some(d1_ref,d1) = resolve_dir_ref s0 (butlast ns_dst) in
+          let s0 = Fs_ops1.mv s0 (d0_ref,d0) (last ns_src) (d1_ref,d1) (last ns_dst) in
+          let _ = (state0 := s0) in
+          ())
+        | Dname2 ns_src -> (raise (Unix_error (EISDIR,"rename",dst))))
+      | Dname2 ns_dst -> (
+        match rsrc with 
+        | Fname2 ns_src -> (raise (Unix_error (EISDIR,"rename",dst)))
+        | Dname2 ns_src -> (
+          let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src) in
+          let Some(d1_ref,d1) = resolve_dir_ref s0 (butlast ns_dst) in
+          let s0 = Fs_ops1.mvdir s0 (d0_ref,d0) (last ns_src) (d1_ref,d1) (last ns_dst) in
+          let _ = (state0 := s0) in
+          ()))
+  )
+  let (_:string -> string -> unit) = do_rename
+
+  let do_mkdir path perms = (
+    (* FIXME deal with perms *)
+    let s0 = !state0 in
+    let rpath = process_path s0 path in 
+    match rpath with 
+    | None2 ns -> (
+      let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns) in
+      let s0 = Fs_ops1.mkdir s0 (d0_ref,d0) (last ns) in
+      let _ = (state0 := s0) in
+      ())
+    | Fname2 ns -> (raise (Unix_error (EEXIST,"mkdir",path)))
+    | Dname2 ns -> (raise (Unix_error (EEXIST,"mkdir",path))))
+  let (_:string -> Unix.file_perm -> unit) = do_mkdir
+
+  let do_link src dst = (
+    let s0 = !state0 in
+    let spath = process_path s0 src in
+    let dpath = process_path s0 dst in
+    match spath with 
+    | Fname2 ns_src  -> (
+      match dpath with 
+      | None2 ns_dst -> (
+        let Some(i0_ref,i0) = resolve_inode_ref s0 ns_src in
+        let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_dst) in
+        let s0 = link_file s0 (i0_ref,i0) (d0_ref,d0) (last ns_dst) in
+        let _ = (state0 := s0) in
+        ())
+      | _ -> (raise (Unix_error (EEXIST,"link",dst))) (* note, not a file that exists *)
+    )
+    | _ -> (raise (Unix_error (ENOENT,"link",src)))
+  )
+  let (_:string -> string -> unit) = do_link
+
+  let do_rmdir path = (
+    let s0 = !state0 in
+    let rname2 = process_path s0 path in 
+    match rname2 with 
+    | Dname2 ns -> (
+      (* FIXME for resolving a file, often useful to have dir ref as well *)
+      let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns) in
+      let s0 = Fs_ops1.unlink s0 (d0_ref,d0) (last ns) in
+      let _ = (state0 := s0) in
+      ())
+    | Fname2 _ -> (raise (Unix_error (ENOTDIR,"rmdir",path)))
+    | None2 _ -> (raise (Unix_error (ENOENT,"rmdir",path))))
+  let (_:string -> unit) = do_unlink
+
+  (* still to do:
+  fsyncdir
+  flush
+  fsync
+  rmdir
+  *)
+
+  let _ =
+    main Sys.argv 
+      { 
+        default_operations with 
+  	      getattr = do_getattr;
+  	      readdir = do_readdir;
+  	      fopen = do_fopen;
+  	      read = do_read;
+          write = do_write;
+          truncate = do_truncate;
+          mknod = do_mknod;
+          unlink = do_unlink;
+          rename = do_rename;
+          mkdir = do_mkdir;
+          link = do_link;   
+          rmdir = do_rmdir;
+      }
+
+end
+
+@test do_readdir
+
+  open Parse_lib
+  open Everything
+  open Opsparser
+
+
+let tmppath = "/"
+let tmprs = (tbl_reset (); p3_run_parser (parse_FILENAME |||| parse_DIRNAME) tmppath)
+
+
+
+
+@FIXME move? fs_spec.md
+# Operations parser
+
+We implement a parser that can take a sequence of instructions (separated by ws) and generate caml code for those ops.
+
+See ../src/p3pre.ml ../src/p3mid.ml and ../src/p3post.ml
+
+The real parser is bound to RealOpsParser
+
+Note that we demand that dirnames end in a '/', and filenames do not end in a '/'.
+
+<div style='background-color:#CCFFCC'>
+@FIXME move? opsparser.g
+{{ 
+
+(* a parser for operations *)
+
+open RawParsers
+
+let id x = x
+let c s = content s
+
+let myparse_comm = fun i -> (((a "(*") **>@ until_a "*)" **>@ (a "*)")) >>@ (fun (x,(y,z)) -> dest_Some (concatenate_list [x;y;z]))) i
+
+let rec myparse_wscomm = fun i -> ((parse_epsws)
+   |||@ ((parse_epsws **>@ myparse_comm **>@ myparse_wscomm) >>@ (fun (x,(y,z)) -> dest_Some (concatenate_list [x;y;z] )))) i
+
+let parse_bytes = parse_while (fun s -> not (s="\""))
+
+let name = (parse_while (fun s -> not (s=" " || s="/" || s="\n" )))
+
+let term_to_parser s = (match s with 
+  | "?w?" -> (myparse_wscomm)
+  | "?bytes?" -> parse_bytes
+  | "?name?" -> name
+  | _ -> (RawParsers.term_to_parser s))
+
+open Fs_types
+
+}}
+
+OPS -> OP                                    {{ fun x -> [x] }}                                       
+  | OP ?w? OPS                               {{ fun (x,(_,xs)) -> x::xs }}                            
+                                             
+OP ->                              
+    "ln" ?w? FILENAME ?w? DIRNAME ?w? NAME {{ fun (_,(_,(fn,(_,(dn,(_,n)))))) -> LN(fn,dn,n) }}      
+  | "unlink" ?w? DIRNAME ?w? NAME              {{ fun (_,(_,(dn,(_,n)))) -> UNLINK(dn,n) }}             
+  | "mkdir" ?w? DIRNAME ?w? NAME             {{ fun (_,(_,(dn,(_,n)))) -> MKDIR(dn,n) }}              
+  | "rmdir" ?w? DIRNAME ?w? NAME             {{ fun (_,(_,(dn,(_,n)))) -> RMDIR(dn,n) }}              
+  | "touch" ?w? DIRNAME ?w? NAME             {{ fun (_,(_,(dn,(_,n)))) -> TOUCH(dn,n) }}              
+  | "rm" ?w? DIRNAME ?w? NAME                {{ fun (_,(_,(dn,(_,n)))) -> RM(dn,n) }}                 
+  | "mvdir" ?w? DIRNAME ?w? NAME ?w? DIRNAME ?w? NAME {{ fun (_,(_,(dn1,(_,(n1,(_,(dn2,(_,n2)))))))) -> MVDIR(dn1,n1,dn2,n2) }}
+  | "mv" ?w? DIRNAME ?w? NAME ?w? DIRNAME ?w? NAME  {{ fun (_,(_,(dn1,(_,(n1,(_,(dn2,(_,n2)))))))) -> MV(dn1,n1,dn2,n2) }}   
+  | "cp" ?w? FILENAME ?w? DIRNAME ?w? NAME   {{ fun (_,(_,(fn,(_,(dn,(_,n)))))) -> CP(fn,dn,n) }}     
+  | "cpdir" ?w? DIRNAME ?w? DIRNAME ?w? NAME {{ fun (_,(_,(fn,(_,(dn,(_,n)))))) -> CPDIR(fn,dn,n) }}  
+  | "write" ?w? FILENAME ?w? BYTES {{ fun (w,(_,(fn,(_,bs)))) -> WRITE(fn,bs) }}
+  | "write64" ?w? FILENAME ?w? ?num? ?w? BYTES {{ fun (w,(_,(fn,(_,(off,(_,bs)))))) -> WRITE64(fn,int_of_string (content off),bs) }}
+                                             
+NAME -> ?name?                               {{ c }}                                                  
+
+(* we force DIRNAME to end with a /, to distinguish it from a filename; obviously normal shells don't do this! BEWARE *)
+
+DIRNAME -> "/"                   {{ fun _ -> [] }}            
+  | "/" NAMEPLUS "/"             {{ fun (_,(ns,_)) -> ns }}       
+
+NAMEPLUS -> NAME                 {{ fun x -> [x] }}           
+  | NAME "/" NAMEPLUS            {{ fun (x,(_,xs)) -> x::xs }}
+
+(* FILENAME doesn't end in a / *)
+FILENAME -> "/" NAMEPLUS         {{ fun (_,ns) -> ns }}       
+
+BYTES -> '"' ?bytes? '"'  {{ fun (_,(s,_)) -> c s }}
+
+@FIXME move? fs_spec.md
+</div>
+
+@test ops parser
+
+    #cd "/tmp/l/general/research/parsing/src";;
+    #use "parse_lib.ml";;
+    open Everything;;
+
+ #cd "/tmp/l/general/research/fs/src"
+ #use "ops.ml"
+
+open FsEverything
+
+cat >/tmp/tmp.txt <<EOF
+mkdir / tmp2
+rmdir / tmp2
+mkdir / tmp
+touch /tmp/ tmp.txt
+touch /tmp/ tmp2.txt
+rm /tmp/ tmp.txt
+EOF
+
+let [(ops,_)] = (tbl_reset (); p3_run_parser (parse_OPS ***> P3BasicParsers.parse_epsws) (read_file_as_string "/tmp/tmp.txt"))
+
+let tmp_states = process_ops ops
+
+let _ = print_endline (string_of_state (thrd (List.nth tmp_states 6)))
+
+ # NB in the following, the rm should actually fail because tmp.txt doesn't exist (mv'ed earlier)
+
+cat >/tmp/tmp.txt <<EOF
+mkdir / tmp
+mkdir /tmp/ somedir
+mkdir /tmp/somedir/ anotherdir
+touch /tmp/ tmp.txt
+touch /tmp/somedir/ somedir.txt
+mvdir /tmp/ somedir / somedir
+mv /tmp/ tmp.txt /somedir/ tmp.txt
+cp /somedir/somedir.txt /tmp/ somedircopy.txt
+cpdir /somedir/ /tmp/ somedircopy
+rm /tmp/ tmp.txt
+rmdir /tmp/ somedircopy
+ln /somedir/somedir.txt /tmp/ somedirlink.txt
+write /tmp/somedirlink.txt "hello world"
+EOF
+
+
+
+let [(ops,_)] = (tbl_reset (); p3_run_parser (parse_OPS ***> P3BasicParsers.parse_epsws) (read_file_as_string "/tmp/tmp.txt"))
+
+let tmp_states = process_ops ops
+
+let _ = print_endline (string_of_state (thrd (List.nth tmp_states 13)))
+
+
+let s0 = thrd(List.nth tmp_states 11)
+let Some(tmpref,tmp) = resolve_dir_ref s0 ["somedir";"anotherdir"]
+let Some(ents) = lookup_entries s0 (Entries_ref 3)
+let _ = Entries.bindings ents
+
+let s0 = thrd(List.nth tmp_states 13)
+let _ = read s0 (dest_Some (resolve_inode_ref s0 ["tmp";"somedirlink.txt"]))
+let _ = read s0 (dest_Some (resolve_inode_ref s0 ["somedir";"somedir.txt"]))
+
+let _ = print_endline (cmdline_of_ops ops)
+
+(* works pretty well! picked up that rm /tmp/tmp.txt didn't work *)
+
+@ignore
+# Local variables
+
+Local Variables:
+mode: tuareg
+mode: hi-lock
+mode: outline-minor
+outline-regexp: "@\\|#+"
+End:
+

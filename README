@@ -1,0 +1,7 @@
+System requirements: ocaml ocamlscript pandoc
+
+For ocaml and ocamlscript, easiest to install via opam.
+
+To build doc etc: `cd src && make`
+
+Generated doc included as a convenience in doc/fs_spec.saved.html

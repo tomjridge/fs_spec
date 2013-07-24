@@ -1,0 +1,2157 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta http-equiv="Content-Style-Type" content="text/css" />
+  <meta name="generator" content="pandoc" />
+  <title></title>
+  <style type="text/css">code{white-space: pre;}</style>
+  <style type="text/css">
+table.sourceCode, tr.sourceCode, td.lineNumbers, td.sourceCode {
+  margin: 0; padding: 0; vertical-align: baseline; border: none; }
+table.sourceCode { width: 100%; line-height: 100%; }
+td.lineNumbers { text-align: right; padding-right: 4px; padding-left: 4px; color: #aaaaaa; border-right: 1px solid #aaaaaa; }
+td.sourceCode { padding-left: 5px; }
+code > span.kw { color: #007020; font-weight: bold; }
+code > span.dt { color: #902000; }
+code > span.dv { color: #40a070; }
+code > span.bn { color: #40a070; }
+code > span.fl { color: #40a070; }
+code > span.ch { color: #4070a0; }
+code > span.st { color: #4070a0; }
+code > span.co { color: #60a0b0; font-style: italic; }
+code > span.ot { color: #007020; }
+code > span.al { color: #ff0000; font-weight: bold; }
+code > span.fu { color: #06287e; }
+code > span.er { color: #ff0000; font-weight: bold; }
+  </style>
+</head>
+<body>
+<div id="TOC">
+<ul>
+<li><a href="#interactive-top-level-directives">Interactive top-level directives</a></li>
+<li><a href="#fs_spec.ml">fs_spec.ml</a><ul>
+<li><a href="#prelude">Prelude</a></li>
+<li><a href="#file-utils">File utils</a></li>
+<li><a href="#fs_types">Fs_types</a></li>
+<li><a href="#lifting-basic-functions-to-state">Lifting basic functions to state</a></li>
+<li><a href="#common-functions">Common functions</a></li>
+<li><a href="#fs_ops1"><code>Fs_ops1</code></a><ul>
+<li><a href="#internal_link_dir"><code>internal_link_dir</code></a></li>
+<li><a href="#internal_link_file"><code>internal_link_file</code></a></li>
+<li><a href="#link_file"><code>link_file</code></a></li>
+<li><a href="#unlink"><code>unlink</code></a></li>
+<li><a href="#mkdir"><code>mkdir</code></a></li>
+<li><a href="#rmdir"><code>rmdir</code></a></li>
+<li><a href="#touch"><code>touch</code></a></li>
+<li><a href="#rm"><code>rm</code></a></li>
+<li><a href="#mvdir"><code>mvdir</code></a></li>
+<li><a href="#mv"><code>mv</code></a></li>
+<li><a href="#write"><code>write</code></a></li>
+<li><a href="#read"><code>read</code></a></li>
+</ul></li>
+<li><a href="#resolve-names">Resolve names</a></li>
+<li><a href="#fs_ops2"><code>Fs_ops2</code></a></li>
+<li><a href="#fs_ops3"><code>Fs_ops3</code></a></li>
+<li><a href="#transition-system">Transition system</a></li>
+</ul></li>
+</ul>
+</div>
+<h1 id="interactive-top-level-directives"><a href="#interactive-top-level-directives">Interactive top-level directives</a></h1>
+<p>Via findlib:</p>
+<pre><code>#use &quot;topfind&quot;;;
+#require &quot;unix&quot;;;
+#require &quot;bigarray&quot;;;
+#use &quot;fs_spec.toplevel.ml&quot;;;</code></pre>
+<h1 id="fs_spec.ml"><a href="#fs_spec.ml">fs_spec.ml</a></h1>
+<h2 id="prelude"><a href="#prelude">Prelude</a></h2>
+<p>The initial code for <code>MyDynArray</code> is a hacky attempt to implement dynamic arrays. Later I wanted functional arrays (no update in place) which I tacked on. TODO this all needs to be redone. We want a functional interface and an efficient implementation that assumes linear usage (ie updates in place). We should also check that uses are linear.</p>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+<span class="co">(* dynamic arrays: resize an array to a target size, using doubling *)</span>
+<span class="ot">module</span> MyDynArray1 = <span class="kw">struct</span>
+  
+  <span class="ot">module</span> A = Bigarray<span class="kw">.</span><span class="dt">Array1</span>
+  
+  <span class="kw">type</span> myfusebuffer = (<span class="dt">char</span>, Bigarray<span class="kw">.</span>int8_unsigned_elt, Bigarray<span class="kw">.</span>c_layout) Bigarray<span class="kw">.</span>Array1<span class="kw">.</span>t
+  
+  <span class="kw">type</span> t = myfusebuffer <span class="co">(* keep abstract *)</span>
+  
+  <span class="kw">let</span> get_array (da:t) = (da:myfusebuffer)
+
+  <span class="co">(* FIXME hopefully this works with 0 length arrays *)</span>
+  <span class="kw">let</span> <span class="kw">rec</span> resize&#39; target cur = (
+    <span class="kw">let</span> cur = (<span class="kw">if</span> cur=0 <span class="kw">then</span> 1 <span class="kw">else</span> cur) <span class="kw">in</span>
+    <span class="kw">if</span> target &lt; cur <span class="kw">then</span> cur <span class="kw">else</span> resize&#39; target (2*cur))
+  
+  <span class="co">(* resize an array so that it is at least as big as n; invariant: minsize &lt;= dim (resize da minsize) *)</span>
+  <span class="kw">let</span> resize da minsize = (
+    <span class="kw">let</span> cur = Bigarray<span class="kw">.</span>Array1<span class="kw">.</span>dim da <span class="kw">in</span>
+    <span class="kw">let</span> newsize = resize&#39; minsize cur <span class="kw">in</span>
+    <span class="kw">if</span> (newsize = cur) <span class="kw">then</span> da <span class="kw">else</span> (
+      <span class="kw">let</span> newbuf = A<span class="kw">.</span>create (A<span class="kw">.</span>kind da) (A<span class="kw">.</span>layout da) newsize <span class="kw">in</span>
+      <span class="kw">let</span> _ = A<span class="kw">.</span>blit da (A<span class="kw">.</span>sub newbuf 0 (A<span class="kw">.</span>dim da)) <span class="kw">in</span>
+      newbuf
+    ))
+      
+<span class="kw">end</span>
+
+<span class="ot">module</span> <span class="kw">type</span> <span class="dt">MYDYNARRAY</span> = <span class="kw">sig</span>
+
+  <span class="kw">type</span> myfusebuffer = (<span class="dt">char</span>, Bigarray<span class="kw">.</span>int8_unsigned_elt, Bigarray<span class="kw">.</span>c_layout) Bigarray<span class="kw">.</span>Array1<span class="kw">.</span>t
+
+  <span class="kw">type</span> t
+
+  <span class="kw">val</span> of_array : myfusebuffer -&gt; t
+
+  <span class="kw">val</span> of_string : <span class="dt">string</span> -&gt; t
+
+  <span class="kw">val</span> create : <span class="dt">unit</span> -&gt; t
+
+  <span class="kw">val</span> dim : t -&gt; <span class="dt">int</span>
+
+  <span class="kw">val</span> resize : t -&gt; <span class="dt">int</span> -&gt; t
+
+  <span class="kw">val</span> blit : t * <span class="dt">int</span> * <span class="dt">int</span> -&gt; t * <span class="dt">int</span> -&gt; t
+
+  <span class="kw">val</span> blit_array1: t * <span class="dt">int</span> * <span class="dt">int</span> -&gt; myfusebuffer * <span class="dt">int</span> -&gt; <span class="dt">int</span>
+
+  <span class="kw">val</span> get: t -&gt; <span class="dt">int</span> -&gt; <span class="dt">char</span>
+
+  <span class="kw">val</span> set: t -&gt; <span class="dt">int</span> -&gt; <span class="dt">char</span> -&gt; t
+
+  <span class="kw">val</span> to_array: t -&gt; myfusebuffer
+
+  <span class="kw">val</span> sub: t -&gt; <span class="dt">int</span> -&gt; <span class="dt">int</span> -&gt; t
+
+  <span class="co">(* form a new array based on arr1, but with data from arr2, at ofs, length len *)</span>
+  <span class="kw">val</span> write: t -&gt; <span class="dt">int</span> -&gt; t -&gt; <span class="dt">int</span> -&gt; <span class="dt">int</span> -&gt; t
+
+<span class="kw">end</span>
+
+
+<span class="co">(* like an array, but the array is potentially larger than the data we need to store, so we also keep track of the length of the data *)</span>
+<span class="ot">module</span> MyDynArray2 = <span class="kw">struct</span>
+
+  <span class="kw">type</span> myfusebuffer = (<span class="dt">char</span>, Bigarray<span class="kw">.</span>int8_unsigned_elt, Bigarray<span class="kw">.</span>c_layout) Bigarray<span class="kw">.</span>Array1<span class="kw">.</span>t
+
+  <span class="ot">module</span> A = Bigarray<span class="kw">.</span><span class="dt">Array1</span>
+
+  <span class="co">(* i is the length of the dynamic array, given some implementation; invariant (i,arr): i &lt;= dim arr *)</span>
+  <span class="kw">type</span> t = <span class="dt">int</span> * MyDynArray1<span class="kw">.</span>t
+
+  <span class="kw">let</span> dim (i,arr) = i
+
+  <span class="kw">let</span> resize (i,arr) j = (j,MyDynArray1<span class="kw">.</span>resize arr j)
+
+  <span class="co">(* FIXME what if dim arr = 0 ? *)</span>
+  <span class="kw">let</span> of_array arr = (A<span class="kw">.</span>dim arr,arr)
+
+  <span class="co">(* convenience only; don&#39;t use in production code *)</span>
+  <span class="kw">let</span> of_string bs = (
+    <span class="kw">let</span> arr = (Array<span class="kw">.</span>init (String<span class="kw">.</span>length bs) (String<span class="kw">.</span>get bs)) <span class="kw">in</span>
+    <span class="kw">let</span> contents : myfusebuffer = A<span class="kw">.</span>of_array Bigarray<span class="kw">.</span><span class="dt">char</span> Bigarray<span class="kw">.</span>c_layout arr <span class="kw">in</span>
+    of_array contents)
+
+  <span class="kw">let</span> create () = (
+    <span class="kw">let</span> arr = A<span class="kw">.</span>create Bigarray<span class="kw">.</span><span class="dt">char</span> Bigarray<span class="kw">.</span>c_layout 4096 <span class="kw">in</span>
+    <span class="kw">let</span> _ = A<span class="kw">.</span>fill arr <span class="ch">&#39;\x00&#39;</span> <span class="kw">in</span>
+    (0, arr))
+
+  <span class="co">(* assumes ofs1+len1&lt;i (sim with the other ops) ; resizes if necessary, ie may not mutate in place! *)</span>
+  <span class="kw">let</span> blit ((i1,arr1),ofs1,len1) ((i2,arr2),ofs2) = (
+    <span class="kw">let</span> size2 = ofs2+len1 <span class="kw">in</span>
+    <span class="kw">let</span> (i2,arr2) = (
+      <span class="kw">if</span> (i2 &lt; size2) <span class="kw">then</span> (size2,MyDynArray1<span class="kw">.</span>resize arr2 size2) <span class="kw">else</span> (i2,arr2))
+    <span class="kw">in</span>
+    <span class="kw">let</span> _ = A<span class="kw">.</span>blit (A<span class="kw">.</span>sub arr1 ofs1 len1) (A<span class="kw">.</span>sub arr2 ofs2 len1) <span class="kw">in</span>
+    (i2,arr2))
+
+  <span class="co">(* arr2 is a buffer eg that we are reading to; we return the number of bytes copied *)</span>
+  <span class="co">(* assumes ofs1+len1 &lt; i1 *)</span>
+  <span class="kw">let</span> blit_array1 ((i1,arr1),ofs1,len1) (arr2,ofs2) = (
+    <span class="kw">let</span> len = min len1 (A<span class="kw">.</span>dim arr2 - ofs2) <span class="kw">in</span>
+    <span class="kw">let</span> _ = A<span class="kw">.</span>blit (A<span class="kw">.</span>sub arr1 ofs1 len) (A<span class="kw">.</span>sub arr2 ofs2 len) <span class="kw">in</span>
+    len)
+
+  <span class="kw">let</span> get (i,arr) j = (<span class="kw">if</span> j&lt;i <span class="kw">then</span> A<span class="kw">.</span>get arr j <span class="kw">else</span> raise (<span class="dt">Invalid_argument</span> <span class="st">&quot;MyDynArray2: get, index out of bounds&quot;</span>))
+
+  <span class="kw">let</span> set (i,arr) j c = (
+    <span class="kw">let</span> arr = (<span class="kw">if</span> j &gt; A<span class="kw">.</span>dim arr <span class="kw">then</span> (MyDynArray1<span class="kw">.</span>resize arr j) <span class="kw">else</span> (arr)) <span class="kw">in</span>
+    <span class="kw">let</span> i = (<span class="kw">if</span> j &gt;= i <span class="kw">then</span> j+1 <span class="kw">else</span> i) <span class="kw">in</span>
+    <span class="kw">let</span> _ = A<span class="kw">.</span>set arr j c <span class="kw">in</span>
+    (i,arr))
+
+  <span class="kw">let</span> to_array (i,arr1) = (
+    <span class="kw">let</span> arr2 = A<span class="kw">.</span>create Bigarray<span class="kw">.</span><span class="dt">char</span> Bigarray<span class="kw">.</span>c_layout i <span class="kw">in</span>
+    <span class="kw">let</span> _ = A<span class="kw">.</span>blit (A<span class="kw">.</span>sub arr1 0 i) arr2 <span class="kw">in</span>
+    arr2)
+
+  <span class="co">(* FIXME we need a module representing arrays, but where the ops act functionally ie they return a new array every time *)</span>
+  <span class="co">(* FIXME decide what the functional interface to arrays should be; maybe we should mutate and assume arrays are used linearly? *)</span>
+  <span class="co">(* behaves as functional call *)</span>
+  <span class="kw">let</span> sub (i,arr) ofs len = (
+    <span class="kw">let</span> arr2 = A<span class="kw">.</span>sub arr ofs len <span class="kw">in</span>
+    (len,arr2))
+ 
+  <span class="kw">let</span> copy (i,arr) = (
+    <span class="kw">let</span> arr&#39; = create () <span class="kw">in</span>
+    <span class="kw">let</span> _ = blit ((i,arr),0,i) (arr&#39;,0) <span class="kw">in</span>
+    arr&#39;)
+
+  <span class="co">(* behaves as functional call *)</span>
+  <span class="kw">let</span> write arr1 ofs1 (i2,arr2) ofs2 len2 = (
+    <span class="kw">let</span> arr1 = copy arr1 <span class="kw">in</span>
+    <span class="kw">let</span> _ = blit ((i2,arr2),ofs2,len2) (arr1,ofs1) <span class="kw">in</span>
+    arr1)
+   
+<span class="kw">end</span>
+
+<span class="ot">module</span> MyDynArray = (<span class="dt">MyDynArray2</span> : <span class="dt">MYDYNARRAY</span>)
+
+
+<span class="ot">module</span> Prelude = <span class="kw">struct</span>
+
+  <span class="ot">module</span> <span class="kw">type</span> <span class="dt">MYSET</span> = <span class="kw">sig</span>
+    <span class="kw">type</span> elt 
+    <span class="kw">type</span> t
+    <span class="kw">val</span> add : elt -&gt; t -&gt; t
+    <span class="kw">val</span> choose : t -&gt; elt
+    <span class="kw">val</span> diff : t -&gt; t -&gt; t
+    <span class="kw">val</span> elements : t -&gt; elt <span class="dt">list</span>
+    <span class="kw">val</span> empty : t
+    <span class="kw">val</span> filter : (elt -&gt; <span class="dt">bool</span>) -&gt; t -&gt; t
+    <span class="kw">val</span> fold : (elt -&gt; &#39;a -&gt; &#39;a) -&gt; t -&gt; &#39;a -&gt; &#39;a
+    <span class="kw">val</span> from_list : elt <span class="dt">list</span> -&gt; t
+    <span class="kw">val</span> is_empty : t -&gt; <span class="dt">bool</span>
+    <span class="kw">val</span> list_union : elt <span class="dt">list</span> -&gt; t -&gt; t
+    <span class="kw">val</span> map : (elt -&gt; elt) -&gt; t -&gt; t
+    <span class="kw">val</span> maximal_less_than : elt -&gt; t -&gt; elt <span class="dt">option</span>
+    <span class="kw">val</span> mem : elt -&gt; t -&gt; <span class="dt">bool</span>
+    <span class="kw">val</span> remove : elt -&gt; t -&gt; t
+    <span class="kw">val</span> split : elt -&gt; t -&gt; t * <span class="dt">bool</span> * t
+    <span class="kw">val</span> union : t -&gt; t -&gt; t
+  <span class="kw">end</span>
+  
+  <span class="ot">module</span> MySet_Make = <span class="kw">functor</span> (Ord:Set<span class="kw">.</span><span class="dt">OrderedType</span>) -&gt; (<span class="kw">struct</span>
+    <span class="ot">include</span> Set<span class="kw">.</span>Make(<span class="dt">Ord</span>)
+    <span class="kw">let</span> maximal_less_than e s = (
+      <span class="kw">let</span> (smaller,_,larger) = split e s <span class="kw">in</span>
+      <span class="kw">if</span> (is_empty smaller) <span class="kw">then</span> <span class="dt">None</span> <span class="kw">else</span> (<span class="dt">Some</span>(max_elt smaller)))
+    <span class="kw">let</span> <span class="kw">rec</span> itlist f l b =
+      <span class="kw">match</span> l <span class="kw">with</span>
+        [] -&gt; b
+      | (h::t) -&gt; f h (itlist f t b)
+    <span class="kw">let</span> list_union xs s =
+      itlist (<span class="kw">fun</span> x -&gt; <span class="kw">fun</span> s -&gt; <span class="co">(*Set_earley_item.*)</span>add x s) xs s
+    <span class="kw">let</span> map f s =
+      <span class="kw">let</span> f1 x s = <span class="co">(*Set_earley_item.*)</span>add (f x) s <span class="kw">in</span>
+      <span class="co">(*Set_earley_item.*)</span>fold f1 s <span class="co">(*Set_earley_item.*)</span>empty
+    <span class="kw">let</span> from_list elts = 
+      <span class="kw">let</span> f1 elt s = add elt s <span class="kw">in</span>
+      itlist f1 elts empty
+  <span class="kw">end</span> : <span class="dt">MYSET</span> <span class="kw">with</span> <span class="kw">type</span> elt = Ord<span class="kw">.</span>t)  
+
+  <span class="ot">module</span> <span class="kw">type</span> <span class="dt">MYMAP</span> = <span class="kw">sig</span>
+    <span class="kw">type</span> key
+    <span class="kw">type</span> value
+    <span class="kw">type</span> ty_map
+    <span class="kw">val</span> empty : ty_map
+    <span class="kw">val</span> add : key -&gt; value -&gt; ty_map -&gt; ty_map
+    <span class="kw">val</span> remove:key -&gt; ty_map -&gt; ty_map
+    <span class="kw">val</span> find2 : key -&gt; ty_map -&gt; value
+    <span class="kw">val</span> bindings : ty_map -&gt; (key * value) <span class="dt">list</span>
+  <span class="kw">end</span>
+
+  <span class="co">(* argument to Map functor *)</span>
+  <span class="co">(* FIXME what if we insert a default value? we may want to remove the k,v in the map; but this requires that we can check that a value is a default *)</span>
+  <span class="ot">module</span> <span class="kw">type</span> <span class="dt">MAPINPUT</span> = <span class="kw">sig</span>
+      <span class="kw">type</span> key
+      <span class="kw">type</span> value
+      <span class="kw">val</span> compare : key -&gt; key -&gt; <span class="dt">int</span>
+      <span class="kw">val</span> default: value
+      <span class="kw">val</span> is_default: value -&gt; <span class="dt">bool</span>
+  <span class="kw">end</span>
+  
+  <span class="ot">module</span> MyMap = <span class="kw">functor</span> (<span class="dt">MapInput:MAPINPUT</span>) -&gt; (<span class="kw">struct</span>
+    <span class="ot">module</span> Ord = <span class="kw">struct</span>
+        <span class="kw">type</span> t = MapInput<span class="kw">.</span>key
+        <span class="kw">let</span> compare = MapInput<span class="kw">.</span>compare
+    <span class="kw">end</span>
+    <span class="ot">include</span> Map<span class="kw">.</span>Make(<span class="dt">Ord</span>)
+    <span class="kw">type</span> value=MapInput.value
+    <span class="kw">type</span> ty_map=MapInput.value t
+    <span class="kw">let</span> add k v m = (
+      <span class="kw">if</span> MapInput<span class="kw">.</span>is_default v <span class="kw">then</span> remove k m <span class="kw">else</span> add k v m)
+    <span class="kw">let</span> find2 k m =
+      <span class="kw">if</span> (mem k m) <span class="kw">then</span> (find k m) <span class="kw">else</span> MapInput<span class="kw">.</span>default
+  <span class="kw">end</span> : (<span class="dt">MYMAP</span> <span class="kw">with</span> <span class="kw">type</span> key = MapInput<span class="kw">.</span>key <span class="kw">and</span> <span class="kw">type</span> value = MapInput<span class="kw">.</span>value))
+
+  <span class="co">(* basic library functions *)</span>
+  
+  <span class="kw">type</span> (&#39;a,&#39;b) sum = <span class="dt">Inl</span> <span class="kw">of</span> &#39;a | <span class="dt">Inr</span> <span class="kw">of</span> &#39;b
+  
+  <span class="kw">let</span> is_Inl x = (<span class="kw">match</span> x <span class="kw">with</span> | <span class="dt">Inl</span> x -&gt; <span class="kw">true</span> | _ -&gt; <span class="kw">false</span>)
+  <span class="kw">let</span> is_Inr x = (<span class="kw">match</span> x <span class="kw">with</span> | <span class="dt">Inr</span> x -&gt; <span class="kw">true</span> | _ -&gt; <span class="kw">false</span>)
+
+  <span class="kw">let</span> dest_Inl x = (<span class="kw">match</span> x <span class="kw">with</span> | <span class="dt">Inl</span> x -&gt; x | _ -&gt; failwith <span class="st">&quot;dest_Inl&quot;</span>)
+  <span class="kw">let</span> dest_Inr x = (<span class="kw">match</span> x <span class="kw">with</span> | <span class="dt">Inr</span> x -&gt; x | _ -&gt; failwith <span class="st">&quot;dest_Inr&quot;</span>)
+  
+  <span class="co">(* FIXME change names of predefined combinators to reflect use of not_epsilon (i.e. default is epsilon) *)</span>
+  
+  <span class="kw">let</span> <span class="kw">rec</span> itlist f l b =
+    <span class="kw">match</span> l <span class="kw">with</span>
+      [] -&gt; b
+    | (h::t) -&gt; f h (itlist f t b);;
+  
+  <span class="kw">let</span> <span class="kw">rec</span> mem x lis =
+    <span class="kw">match</span> lis <span class="kw">with</span>
+      [] -&gt; <span class="kw">false</span>
+    | (h::t) -&gt; Pervasives<span class="kw">.</span>compare x h = 0 <span class="kw">or</span> mem x t;;
+  
+  <span class="kw">let</span> insert x l =
+    <span class="kw">if</span> mem x l <span class="kw">then</span> l <span class="kw">else</span> x::l;;
+  
+  <span class="kw">let</span> union l1 l2 = itlist insert l1 l2;;
+  
+  <span class="kw">let</span> unions l = itlist union l [];;
+  
+  
+  <span class="kw">let</span> ($) f g x = f(g x)
+  
+  <span class="co">(*</span>
+<span class="co">  let read_file_as_string fn = </span>
+<span class="co">    let f = open_in fn in</span>
+<span class="co">    let s = ref &quot;&quot; in</span>
+<span class="co">    let _ = try (while(true) do s := (!s) ^ (input_line f) ^ &quot;\n&quot; done) with _ -&gt; () in</span>
+<span class="co">    let _ = close_in f in</span>
+<span class="co">    !s</span>
+<span class="co">  *)</span>
+  
+  <span class="kw">let</span> lines fname = 
+    <span class="kw">let</span> lines = <span class="dt">ref</span> [] <span class="kw">in</span>
+    <span class="kw">let</span> chan = <span class="kw">if</span> fname=<span class="st">&quot;-&quot;</span> <span class="kw">then</span> Pervasives<span class="kw">.</span>stdin <span class="kw">else</span> open_in fname <span class="kw">in</span>
+    <span class="kw">try</span>
+      <span class="kw">while</span> <span class="kw">true</span>; <span class="kw">do</span>
+        lines := input_line chan :: !lines
+      <span class="kw">done</span>; []
+    <span class="kw">with</span> <span class="dt">End_of_file</span> -&gt;
+      close_in chan;
+      List<span class="kw">.</span>rev !lines
+  
+  <span class="kw">let</span> read_file_as_string fn = 
+    <span class="kw">let</span> ls = lines fn <span class="kw">in</span>
+    ((String<span class="kw">.</span>concat <span class="st">&quot;</span><span class="ch">\n</span><span class="st">&quot;</span> ls)^<span class="st">&quot;</span><span class="ch">\n</span><span class="st">&quot;</span>)
+  
+  <span class="co">(* get a list with no duplicates; inefficient? FIXME do we mean List.memq? *)</span>
+  <span class="kw">let</span> unique_f res e = <span class="kw">if</span> List<span class="kw">.</span>mem e res <span class="kw">then</span> res <span class="kw">else</span> e::res
+  
+  <span class="co">(* this is insertion sort; alternatives? *)</span>
+  <span class="kw">let</span> unique = <span class="kw">fun</span> e -&gt; List<span class="kw">.</span>fold_left unique_f [] e
+  
+  <span class="kw">let</span> is_Some x = x &lt;&gt; <span class="dt">None</span>
+  
+  <span class="kw">let</span> dest_Some x = <span class="kw">match</span> x <span class="kw">with</span> <span class="dt">Some</span> y -&gt; y | _ -&gt; failwith <span class="st">&quot;dest_Some&quot;</span>
+
+  <span class="kw">let</span> <span class="kw">rec</span> allpairs f l1 l2 =
+    <span class="kw">match</span> l1 <span class="kw">with</span>
+     h1::t1 -&gt;  itlist (<span class="kw">fun</span> x a -&gt; f h1 x :: a) l2 (allpairs f t1 l2)
+     | [] -&gt; []
+
+  <span class="kw">let</span> <span class="kw">rec</span> last l =
+    <span class="kw">match</span> l <span class="kw">with</span>
+      [x] -&gt; x
+    | (h::t) -&gt; last t
+    | [] -&gt; failwith <span class="st">&quot;last&quot;</span>;;
+  
+  <span class="kw">let</span> <span class="kw">rec</span> butlast l =
+    <span class="kw">match</span> l <span class="kw">with</span>
+      [_] -&gt; []
+    | (h::t) -&gt; h::(butlast t)
+    | [] -&gt; failwith <span class="st">&quot;butlast&quot;</span>;;
+
+
+  <span class="kw">let</span> implode l = itlist (^) l <span class="st">&quot;&quot;</span>;;
+  
+  <span class="kw">let</span> explode s =
+    <span class="kw">let</span> <span class="kw">rec</span> exap n l =
+        <span class="kw">if</span> n &lt; 0 <span class="kw">then</span> l <span class="kw">else</span>
+        exap (n - 1) ((String<span class="kw">.</span>sub s n 1)::l) <span class="kw">in</span>
+    exap (String<span class="kw">.</span>length s - 1) [];;
+
+  <span class="co">(* from http://rosettacode.org/wiki/Read_entire_file#OCaml ; when does memory mapping occur? before Unix.close? or does it continually refer to the file on disk? *)</span>
+
+  <span class="kw">type</span> myfusebuffer = (<span class="dt">char</span>, Bigarray<span class="kw">.</span>int8_unsigned_elt, Bigarray<span class="kw">.</span>c_layout) Bigarray<span class="kw">.</span>Array1<span class="kw">.</span>t
+
+  <span class="co">(* tr notes: if filename is empty, the mapping fails; so in this case, we do something special *)</span>
+  <span class="kw">let</span> read_file_as_array filename = (
+    <span class="kw">let</span> fd = Unix<span class="kw">.</span>openfile filename [Unix<span class="kw">.</span><span class="dt">O_RDONLY]</span> 0o640 <span class="kw">in</span>
+    <span class="kw">let</span> len = Unix<span class="kw">.</span>lseek fd 0 Unix<span class="kw">.</span><span class="dt">SEEK_END</span> <span class="kw">in</span>
+    <span class="kw">let</span> _ = Unix<span class="kw">.</span>lseek fd 0 Unix<span class="kw">.</span><span class="dt">SEEK_SET</span> <span class="kw">in</span>
+    <span class="kw">let</span> shared = <span class="kw">false</span> <span class="kw">in</span>  <span class="co">(* modifications are done in memory only *)</span>
+    <span class="kw">let</span> bstr = (<span class="kw">if</span> len=0 <span class="kw">then</span> (
+      Bigarray<span class="kw">.</span>Array1<span class="kw">.</span>create Bigarray<span class="kw">.</span><span class="dt">char</span> Bigarray<span class="kw">.</span>c_layout 0
+    ) <span class="kw">else</span> (
+      Bigarray<span class="kw">.</span>Array1<span class="kw">.</span>map_file fd
+        Bigarray<span class="kw">.</span><span class="dt">char</span> Bigarray<span class="kw">.</span>c_layout shared len))
+    <span class="kw">in</span>
+    Unix<span class="kw">.</span>close fd;
+    (bstr))
+  <span class="kw">let</span> (_:string -&gt; myfusebuffer) = read_file_as_array
+
+  <span class="co">(* FIXME probably doesn&#39;t work if arr length 0 *)</span>
+  <span class="kw">let</span> write_array_as_file arr filename = (
+    <span class="kw">let</span> fd = Unix<span class="kw">.</span>openfile filename [Unix<span class="kw">.</span>O_RDWR;Unix<span class="kw">.</span>O_CREAT;Unix<span class="kw">.</span><span class="dt">O_TRUNC]</span> 0o640 <span class="kw">in</span>
+    <span class="kw">let</span> len = Bigarray<span class="kw">.</span>Array1<span class="kw">.</span>dim arr <span class="kw">in</span>
+    <span class="kw">let</span> _ = Unix<span class="kw">.</span>lseek fd 0 Unix<span class="kw">.</span><span class="dt">SEEK_SET</span> <span class="kw">in</span>
+    <span class="kw">let</span> shared = <span class="kw">true</span> <span class="kw">in</span>  <span class="co">(* modifications are done in memory only *)</span>
+    <span class="kw">let</span> bstr = (Bigarray<span class="kw">.</span>Array1<span class="kw">.</span>map_file fd
+                  Bigarray<span class="kw">.</span><span class="dt">char</span> Bigarray<span class="kw">.</span>c_layout shared len)
+    <span class="kw">in</span>
+    <span class="kw">let</span> _ = Bigarray<span class="kw">.</span>Array1<span class="kw">.</span>blit arr bstr <span class="kw">in</span> 
+    <span class="kw">let</span> _ = Unix<span class="kw">.</span>close fd <span class="kw">in</span>
+    ())
+  <span class="kw">let</span> (_:myfusebuffer -&gt; <span class="dt">string</span> -&gt; <span class="dt">unit</span>) = write_array_as_file
+
+  <span class="ot">module</span> My_stream = <span class="kw">struct</span> 
+
+    <span class="ot">open</span> Bigarray
+
+    <span class="co">(* FIXME scons is at front; snoc is at back; change scons to snoc *)</span>
+    <span class="co">(* (&#39;a,&#39;b) stream_ops is the type of streams implemented using type &#39;a, with vals in &#39;b *)</span>
+    <span class="kw">type</span> (&#39;a,&#39;b) stream_ops = { dest_strm:&#39;a -&gt; (<span class="dt">unit</span>,&#39;b*&#39;a)sum; snc: (&#39;b*&#39;a) -&gt; &#39;a }
+    <span class="co">(* the following is just for packaging streams into a single value; don&#39;t expect ops to change! *)</span>
+    <span class="kw">type</span> (&#39;a,&#39;b) stream = { impl: &#39;a; ops: (&#39;a,&#39;b) stream_ops }
+
+    <span class="kw">let</span> is_snil s = (<span class="kw">match</span> s.ops.dest_strm s.impl <span class="kw">with</span> 
+      | <span class="dt">Inl</span> () -&gt; <span class="kw">true</span>
+      | _ -&gt; <span class="kw">false</span>)
+
+    <span class="kw">let</span> dest_stream s = (
+      <span class="kw">let</span> <span class="dt">Inr</span>(v,impl) = s.ops.dest_strm s.impl <span class="kw">in</span>
+      (v,{s <span class="kw">with</span> impl=impl}))
+
+    <span class="kw">let</span> snoc (c,s) = (
+      <span class="kw">let</span> impl = s.ops.snc (c,s.impl) <span class="kw">in</span>
+      {s <span class="kw">with</span> impl=impl})
+  
+    <span class="co">(* lists as streams *)</span>
+    <span class="kw">type</span> &#39;a list_stream = (&#39;a <span class="dt">list</span>,&#39;a) stream
+    <span class="kw">let</span> list_stream_ops = {
+      dest_strm=(<span class="kw">fun</span> x -&gt; <span class="kw">match</span> x <span class="kw">with</span>
+        | [] -&gt; (<span class="dt">Inl</span> ())
+        | x::xs -&gt; <span class="dt">Inr</span>(x,xs));
+      snc=(<span class="kw">fun</span> (x,xs) -&gt; xs@[x])
+    }
+  
+    <span class="kw">let</span> <span class="kw">rec</span> stream_takeall s = (<span class="kw">match</span> is_snil s <span class="kw">with</span> 
+      | <span class="kw">true</span> -&gt; []
+      | <span class="kw">false</span> -&gt; (
+        <span class="kw">let</span> (c,s) = dest_stream s <span class="kw">in</span>
+        c::(stream_takeall s)))
+    <span class="kw">let</span> (_:(&#39;a,&#39;b)stream -&gt; &#39;b <span class="dt">list</span>) = stream_takeall
+
+
+    <span class="co">(* representing streams of characters using a string; impl is a string and an index *)</span>
+    <span class="kw">let</span> chars_of_string_ops = {
+      dest_strm=(<span class="kw">fun</span> (s,i) -&gt; (
+        <span class="kw">if</span> i=String.length s <span class="kw">then</span> <span class="dt">Inl</span>()
+        <span class="kw">else</span> <span class="dt">Inr</span>(String<span class="kw">.</span>get s i,(s,i+1))
+      ));
+      snc=(<span class="kw">fun</span> (c,(s,i)) -&gt; (s^(String<span class="kw">.</span>make 1 c),i))
+    }
+    <span class="kw">let</span> chars_of_string s = {impl=(s,0); ops=chars_of_string_ops}
+    <span class="kw">let</span> (_:string -&gt; (<span class="dt">string</span>*<span class="dt">int</span>,<span class="dt">char</span>) stream) = chars_of_string
+  
+    <span class="co">(* more efficient - a char stream is a string between a low and high index *)</span>
+    <span class="kw">let</span> chars_of_string_ops = {
+      dest_strm=(<span class="kw">fun</span> (s,l,h) -&gt; (
+        <span class="kw">if</span> l=h <span class="kw">then</span> <span class="dt">Inl</span>()
+        <span class="kw">else</span> <span class="dt">Inr</span>(String<span class="kw">.</span>get s l,(s,(l+1),h))
+      ));
+      snc=(<span class="kw">fun</span> (c,(s,l,h)) -&gt; (
+        <span class="kw">let</span> s = (<span class="kw">if</span> (h=String.length s) <span class="kw">then</span> (
+          <span class="co">(* need to reallocate *)</span>
+          <span class="kw">let</span> _ = <span class="kw">if</span> 0=String.length s <span class="kw">then</span> failwith <span class="st">&quot;chars_of_string_ops: s length 0&quot;</span> <span class="kw">else</span> () <span class="kw">in</span>
+          <span class="kw">let</span> s&#39; = String<span class="kw">.</span>make ((2*(String<span class="kw">.</span>length s))) <span class="ch">&#39;\x00&#39;</span> <span class="kw">in</span>
+          <span class="kw">let</span> _ = String<span class="kw">.</span>blit s 0 s&#39; 0 (String<span class="kw">.</span>length s) <span class="kw">in</span>
+          s&#39;)
+          <span class="kw">else</span> s)
+        <span class="kw">in</span>
+        <span class="kw">let</span> _ = String<span class="kw">.</span>set s h c <span class="kw">in</span>
+        (s,l,h+1)))
+    }
+    <span class="kw">let</span> chars_of_string s = (
+      <span class="co">(* backing strings must be non-empty if we are multiplying length by 2 when resizing *)</span>
+      <span class="kw">if</span> s = <span class="st">&quot;&quot;</span> <span class="kw">then</span> {impl=(<span class="st">&quot;..&quot;</span>,0,0); ops=chars_of_string_ops}
+      <span class="kw">else</span> {impl=(s,0,String<span class="kw">.</span>length s); ops=chars_of_string_ops})
+    <span class="kw">let</span> (_:string -&gt; (<span class="dt">string</span>*<span class="dt">int</span>*<span class="dt">int</span>,<span class="dt">char</span>) stream) = chars_of_string
+  
+    <span class="co">(* to avoid using stream_takeall, we allow to get the stream contents directly from the impl *)</span>
+    <span class="kw">let</span> chars_of_string_takeall s = (
+      <span class="kw">let</span> (s,l,h) = s.impl <span class="kw">in</span>
+      String<span class="kw">.</span>sub s l (h-l))
+    <span class="kw">let</span> (_:(<span class="dt">string</span>*<span class="dt">int</span>*<span class="dt">int</span>,<span class="dt">char</span>) stream -&gt; <span class="dt">string</span>) = chars_of_string_takeall
+  
+
+    <span class="co">(* FIXME these stream types should be in the stream module *)</span>
+    <span class="co">(* also want to deal with arrays particularly myfusebuffer; at the moment only need to read; use dynarray? *)</span>
+    <span class="kw">let</span> chars_of_array_ops = {
+      dest_strm=(<span class="kw">fun</span> (s,l,h) -&gt; 
+        <span class="kw">if</span> l=h <span class="kw">then</span> <span class="dt">Inl</span>()
+        <span class="kw">else</span> <span class="dt">Inr</span>(Array1<span class="kw">.</span>get s l,(s,(l+1),h)));
+      snc=(<span class="kw">fun</span> _ -&gt; failwith <span class="st">&quot;chars_of_array_ops&quot;</span>)
+    }
+    <span class="kw">let</span> chars_of_array s = (
+      <span class="co">(* backing strings must be non-empty if we are multiplying length by 2 when resizing *)</span>
+      <span class="co">(* we never scons, so we don&#39;t need to worry about 0 length array *)</span>
+      {impl=(s,0,Array1<span class="kw">.</span>dim s); ops=chars_of_array_ops})
+    <span class="kw">let</span> (_:myfusebuffer -&gt; (myfusebuffer*<span class="dt">int</span>*<span class="dt">int</span>,<span class="dt">char</span>) stream) = chars_of_array
+
+    <span class="kw">let</span> chars_of_dynarray_ops = {
+      dest_strm=(<span class="kw">fun</span> (s,l,h) -&gt; 
+        <span class="kw">if</span> l=h <span class="kw">then</span> <span class="dt">Inl</span>()
+        <span class="kw">else</span> <span class="dt">Inr</span>(MyDynArray<span class="kw">.</span>get s l,(s,(l+1),h)));
+      snc=(<span class="kw">fun</span> (c,(s,l,h)) -&gt; 
+        <span class="kw">let</span> s = MyDynArray<span class="kw">.</span>set s h c <span class="kw">in</span>
+        (s,l,h+1))
+    }
+    <span class="kw">let</span> chars_of_dynarray s = (
+      {impl=(s,0,MyDynArray<span class="kw">.</span>dim s); ops=chars_of_dynarray_ops})
+    <span class="kw">let</span> (_:MyDynArray.t -&gt; (MyDynArray<span class="kw">.</span>t*<span class="dt">int</span>*<span class="dt">int</span>,<span class="dt">char</span>) stream) = chars_of_dynarray
+  
+  <span class="kw">end</span>
+
+  <span class="ot">include</span> My_stream
+  
+<span class="kw">end</span>
+
+
+
+
+<span class="co">(* based partially on http://ocaml-batteries-team.github.io/batteries-included/hdoc/BatBase64.html *)</span>
+<span class="co">(* following for encoding binary data into human readable string *)</span>
+<span class="co">(* FIXME should probably perform some basic checks on the input - at the momemnt we fail if input is not wellformed *)</span>
+<span class="co">(* FIXME maybe pad, so output is a multiple of 4 bytes - this is what eg the base64 command line tool does; this requires an extra character to indicate &quot;no data&quot;; this is the &quot;padding&quot; referred to in the wikipedia article on base64 *)</span>
+<span class="ot">module</span> Encode = <span class="kw">struct</span>
+
+  <span class="ot">open</span> Prelude
+
+  <span class="kw">let</span> <span class="kw">rec</span> string_of_chars cs = (<span class="kw">match</span> cs <span class="kw">with</span> | [] -&gt; <span class="st">&quot;&quot;</span> | c::cs -&gt; (String<span class="kw">.</span>make 1 c)^(string_of_chars cs))
+
+  <span class="co">(* from batteries *)</span>
+  <span class="kw">type</span> encoding_table = <span class="dt">char</span> <span class="dt">array</span> <span class="co">(* length 64, take a number from 0-63 and give a char *)</span>
+  <span class="kw">type</span> decoding_table = <span class="dt">int</span> <span class="dt">array</span>
+
+  <span class="kw">type</span> safe_char = <span class="co">(* subtype of *)</span> <span class="dt">char</span> <span class="co">(* should be one of the chars below *)</span>
+
+  <span class="kw">type</span> bits_6 = <span class="dt">int</span> <span class="co">(* only bottom 6 bits may be non zero *)</span>
+  <span class="kw">type</span> bits_8 = <span class="dt">int</span>
+  
+  <span class="kw">let</span> chars = [|
+          <span class="ch">&#39;A&#39;</span>;&#39;B&#39;;&#39;C&#39;;&#39;D&#39;;&#39;E&#39;;&#39;F&#39;;&#39;G&#39;;&#39;H&#39;;&#39;I&#39;;&#39;J&#39;;&#39;K&#39;;&#39;L&#39;;&#39;M&#39;;&#39;N&#39;;&#39;O&#39;;&#39;P&#39;;
+          <span class="ch">&#39;Q&#39;</span>;&#39;R&#39;;&#39;S&#39;;&#39;T&#39;;&#39;U&#39;;&#39;V&#39;;&#39;W&#39;;&#39;X&#39;;&#39;Y&#39;;&#39;Z&#39;;&#39;a&#39;;&#39;b&#39;;&#39;c&#39;;&#39;d&#39;;&#39;e&#39;;&#39;f&#39;;
+          <span class="ch">&#39;g&#39;</span>;&#39;h&#39;;&#39;i&#39;;&#39;j&#39;;&#39;k&#39;;&#39;l&#39;;&#39;m&#39;;&#39;n&#39;;&#39;o&#39;;&#39;p&#39;;&#39;q&#39;;&#39;r&#39;;&#39;s&#39;;&#39;t&#39;;&#39;u&#39;;&#39;v&#39;;
+          <span class="ch">&#39;w&#39;</span>;&#39;x&#39;;&#39;y&#39;;&#39;z&#39;;&#39;0&#39;;&#39;1&#39;;&#39;2&#39;;&#39;3&#39;;&#39;4&#39;;&#39;5&#39;;&#39;6&#39;;&#39;7&#39;;&#39;8&#39;;&#39;9&#39;;&#39;+<span class="ch">&#39;;&#39;</span>/&#39;
+  |]
+  
+  <span class="kw">let</span> make_decoding_table tbl =
+          <span class="kw">if</span> Array<span class="kw">.</span>length tbl &lt;&gt; 64 <span class="kw">then</span> failwith <span class="st">&quot;make_decoding_table&quot;</span>;
+          <span class="kw">let</span> d = Array<span class="kw">.</span>make 256 (<span class="dv">-1</span>) <span class="kw">in</span>
+          <span class="kw">for</span> i = 0 <span class="kw">to</span> 63 <span class="kw">do</span>
+                  Array<span class="kw">.</span>unsafe_set d (int_of_char (Array<span class="kw">.</span>unsafe_get tbl i)) i;
+          <span class="kw">done</span>;
+          d
+  
+  <span class="kw">let</span> inv_chars = make_decoding_table chars
+  
+  <span class="co">(* data contains at least 32 bits? what are the assumptions on data? *)</span>
+  <span class="co">(* count is number of bits in data that are valid; valid bits are count-1,count-2,...,0 *)</span>
+  <span class="kw">let</span> <span class="kw">rec</span> encode (sofar,data,count,input) = (
+    <span class="co">(* try and output a char if possible *)</span>
+    <span class="kw">if</span> (count &gt;= 6) <span class="kw">then</span> (
+      <span class="co">(* at least 6 bits in data - output an encoded char *)</span>
+      <span class="kw">let</span> d = (data <span class="kw">asr</span> (count - 6)) <span class="kw">land</span> 63 <span class="kw">in</span>
+      <span class="kw">let</span> c = (Array<span class="kw">.</span>unsafe_get chars d) <span class="kw">in</span>
+      encode ((snoc (c,sofar)),data,count<span class="dv">-6</span>,input)
+    ) <span class="kw">else</span> (
+      <span class="kw">match</span> is_snil input <span class="kw">with</span>
+      | <span class="kw">true</span> -&gt; (
+        <span class="co">(* tricky case - less that 6 bits available *)</span>
+        <span class="kw">if</span> (count &gt; 0) <span class="kw">then</span> 
+          <span class="kw">let</span> d = (data <span class="kw">lsl</span> (6-count)) <span class="kw">land</span> 63 <span class="kw">in</span>
+          <span class="kw">let</span> c = (Array<span class="kw">.</span>unsafe_get chars d) <span class="kw">in</span>
+          snoc (c,sofar)
+        <span class="kw">else</span>
+          sofar)
+      | <span class="kw">false</span> -&gt; (
+        <span class="kw">let</span> (c,input) = dest_stream input <span class="kw">in</span>
+        <span class="kw">let</span> data = (data <span class="kw">lsl</span> 8) <span class="kw">lor</span> (Char<span class="kw">.</span>code c) <span class="kw">in</span>
+        <span class="kw">let</span> count = count + 8 <span class="kw">in</span>
+        encode (sofar,data,count,input))))
+
+  <span class="kw">let</span> encode_string s = (
+    <span class="kw">let</span> cs = encode ((chars_of_string <span class="st">&quot;&quot;</span>),0,0,chars_of_string s) <span class="kw">in</span>
+    chars_of_string_takeall cs)
+  <span class="kw">let</span> (_:string-&gt;string) = encode_string
+  
+  <span class="co">(* the data is decoded bits *)</span>
+  <span class="kw">let</span> <span class="kw">rec</span> decode (sofar,data,count,input) = (
+    <span class="kw">if</span> (count &gt;= 8) <span class="kw">then</span> (
+      <span class="co">(* at least 8 bits in data *)</span>
+      <span class="kw">let</span> d = (data <span class="kw">asr</span> (count - 8)) <span class="kw">land</span> 0xFF <span class="kw">in</span>
+      <span class="kw">let</span> c = Char<span class="kw">.</span>chr d <span class="kw">in</span>
+      decode (snoc (c,sofar),data,count<span class="dv">-8</span>,input)
+    ) <span class="kw">else</span> (
+      <span class="kw">match</span> is_snil input <span class="kw">with</span> 
+      | <span class="kw">true</span> -&gt; (
+        <span class="co">(* assume the data is 0 padding bytes, so discard *)</span>
+        sofar)
+      | <span class="kw">false</span> -&gt; (
+        <span class="kw">let</span> (c,input) = dest_stream input <span class="kw">in</span>
+        <span class="kw">let</span> d = Array<span class="kw">.</span>unsafe_get inv_chars (Char<span class="kw">.</span>code c) <span class="kw">in</span>
+        <span class="kw">let</span> data = (data <span class="kw">lsl</span> 6) <span class="kw">lor</span> d <span class="kw">in</span>
+        decode (sofar,data,count+6,input))))
+ 
+  <span class="kw">let</span> decode_string s = (
+    <span class="kw">let</span> cs = decode ((chars_of_string <span class="st">&quot;&quot;</span>),0,0,chars_of_string s) <span class="kw">in</span>
+    chars_of_string_takeall cs)
+  <span class="kw">let</span> (_:string-&gt;string) = decode_string
+
+  <span class="kw">let</span> encode_array s = (
+    <span class="kw">let</span> cs = encode ((chars_of_string <span class="st">&quot;&quot;</span>),0,0,chars_of_array s) <span class="kw">in</span>
+    <span class="kw">let</span> cs = stream_takeall cs <span class="kw">in</span>
+    string_of_chars cs)
+  <span class="kw">let</span> (_:myfusebuffer-&gt;string) = encode_array
+  
+    
+  <span class="co">(* test </span>
+<span class="co">  let _ = encode_string &quot;Man is distinguished&quot;</span>
+<span class="co">  let _ = encode_string &quot;Man is distinguis&quot;</span>
+<span class="co">  let _ = decode_string &quot;TWFuIGlzIGRpc3Rpbmd1aXN&quot;</span>
+<span class="co">  *)</span>
+
+  <span class="co">(* further fiddling *)</span>
+  <span class="co">(*</span>
+<span class="co">  let bits_6_of_8 = (</span>
+<span class="co">    let is_snil=(fun (s,data,count) -&gt; (count=0) &amp;&amp; (s.ops.is_snil s.impl)) in</span>
+<span class="co">    let rec dest_scons=(fun (s,data,count) -&gt; (</span>
+<span class="co">      if count &gt;= 6 then (</span>
+<span class="co">        (* at least 6 bits in data - output an encoded char *)</span>
+<span class="co">        let d = (data asr (count - 6)) land 63 in</span>
+<span class="co">        (d,(s,data,count-6))</span>
+<span class="co">      ) else (</span>
+<span class="co">        match s.ops.is_snil s.impl with</span>
+<span class="co">        | true -&gt; (</span>
+<span class="co">          (* tricky case - less that 6 bits available *)</span>
+<span class="co">          (* this is only called if not is_snil, which implies that count &gt; 0 *)       </span>
+<span class="co">          let d = (data lsl (6-count)) land 63 in</span>
+<span class="co">          (d,(s,data,0)))</span>
+<span class="co">        | false -&gt; (</span>
+<span class="co">          let (c,s_impl) = s.ops.dest_scons s.impl in</span>
+<span class="co">          let s = {s with impl=s_impl} in</span>
+<span class="co">          let data = (data lsl 8) lor (Char.code c) in</span>
+<span class="co">          let count = count + 8 in</span>
+<span class="co">          dest_scons (s,data,count)))))</span>
+<span class="co">    in</span>
+<span class="co">    let scons=(fun _ -&gt; failwith &quot;bits_6_of_8&quot;) in</span>
+<span class="co">    let ops = { is_snil; dest_scons; scons } in</span>
+<span class="co">    fun s -&gt; { impl=(s,0,0); ops=ops })</span>
+<span class="co">  let (_:(&#39;a,char)stream -&gt; ((&#39;a,char)stream*int*int,bits_6)stream) = bits_6_of_8</span>
+
+<span class="co">  let encode_6 = (</span>
+<span class="co">    let is_snil=(fun s -&gt; s.ops.is_snil s.impl) in</span>
+<span class="co">    let dest_scons=(fun s -&gt; </span>
+<span class="co">      let (i,s_impl) = s.ops.dest_scons s.impl in</span>
+<span class="co">      let s = {s with impl=s_impl} in</span>
+<span class="co">      let c = (Array.unsafe_get chars i) in</span>
+<span class="co">      (c,s)) </span>
+<span class="co">    in</span>
+<span class="co">    let scons=(fun _ -&gt; failwith &quot;encode_6&quot;) in</span>
+<span class="co">    let ops = { is_snil; dest_scons; scons } in</span>
+<span class="co">    fun s -&gt; {impl = s; ops=ops})</span>
+<span class="co">  let (_:(&#39;a,bits_6)stream -&gt; ((&#39;a,bits_6)stream,safe_char) stream) = encode_6</span>
+<span class="co">  (* FIXME might be nice to have record notation for types, rather than pairs *)</span>
+<span class="co">  *)</span>
+
+  <span class="co">(* test </span>
+<span class="co">  let s = chars_of_string &quot;Man&quot;</span>
+<span class="co">  let s2 = bits_6_of_8 s</span>
+<span class="co">  let s3 = encode_6 s2 </span>
+<span class="co">  let _ = stream_takeall s3  </span>
+<span class="co">  *)</span>
+
+<span class="kw">end</span>
+
+</code></pre>
+<h2 id="file-utils"><a href="#file-utils">File utils</a></h2>
+<p>Basic functions dealing with normal files.</p>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span class="ot">module</span> File_utils = <span class="kw">struct</span>
+  
+  <span class="co">(* in this module, filenames (lists of strings) are absolute *)</span>
+  <span class="kw">let</span> string_of_longfname s = <span class="st">&quot;/&quot;</span> ^ (String<span class="kw">.</span>concat <span class="st">&quot;/&quot;</span> s)
+  
+  <span class="co">(* return a list of list of strings - a long filename is a list of dirs and a filename *)</span>
+  <span class="kw">let</span> ls d = 
+    <span class="kw">let</span> lines = <span class="dt">ref</span> [] <span class="kw">in</span>
+    <span class="kw">let</span> h = Unix<span class="kw">.</span>opendir (string_of_longfname d) <span class="kw">in</span>
+    <span class="kw">try</span>
+      <span class="kw">while</span> <span class="kw">true</span>; <span class="kw">do</span>
+        lines := Unix<span class="kw">.</span>readdir h :: !lines
+      <span class="kw">done</span>; []
+    <span class="kw">with</span> <span class="dt">End_of_file</span> -&gt;
+      Unix<span class="kw">.</span>closedir h;
+      List<span class="kw">.</span>map (<span class="kw">fun</span> s -&gt; d@[s]) (List<span class="kw">.</span>filter (<span class="kw">fun</span> s -&gt; not (s=<span class="st">&quot;.&quot;</span> || s = <span class="st">&quot;..&quot;</span>)) (List<span class="kw">.</span>rev !lines))
+  <span class="kw">let</span> (_:string <span class="dt">list</span> -&gt; <span class="dt">string</span> <span class="dt">list</span> <span class="dt">list</span>) = ls
+  
+  <span class="kw">let</span> is_dir d = (
+    <span class="kw">let</span> <span class="ot">open</span> Unix<span class="kw">.</span>LargeFile <span class="kw">in</span>
+    <span class="kw">let</span> stats = stat (string_of_longfname d) <span class="kw">in</span>
+    stats.st_kind = Unix<span class="kw">.</span><span class="dt">S_DIR</span>)
+    
+  <span class="kw">let</span> is_file f = not (is_dir f)
+    
+  <span class="co">(*  test</span>
+<span class="co">  let files = List.filter is_file (ls [&quot;tmp&quot;;&quot;imgs&quot;]) </span>
+<span class="co">  *)</span>
+  
+<span class="kw">end</span></code></pre>
+<h2 id="fs_types"><a href="#fs_types">Fs_types</a></h2>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+<span class="co">(* as an optimization, we expect that each of these refs is actually a ref to a sector *)</span>
+
+<span class="ot">module</span> Fs_types = <span class="kw">struct</span>
+
+  <span class="ot">open</span> Prelude
+
+  <span class="kw">type</span> error =
+      <span class="dt">E2BIG</span>
+    | <span class="dt">EACCES</span>
+    | <span class="dt">EAGAIN</span>
+    | <span class="dt">EBADF</span>
+    | <span class="dt">EBUSY</span>
+    | <span class="dt">ECHILD</span>
+    | <span class="dt">EDEADLK</span>
+    | <span class="dt">EDOM</span>
+    | <span class="dt">EEXIST</span>
+    | <span class="dt">EFAULT</span>
+    | <span class="dt">EFBIG</span>
+    | <span class="dt">EINTR</span>
+    | <span class="dt">EINVAL</span>
+    | <span class="dt">EIO</span>
+    | <span class="dt">EISDIR</span>
+    | <span class="dt">EMFILE</span>
+    | <span class="dt">EMLINK</span>
+    | <span class="dt">ENAMETOOLONG</span>
+    | <span class="dt">ENFILE</span>
+    | <span class="dt">ENODEV</span>
+    | <span class="dt">ENOENT</span>
+    | <span class="dt">ENOEXEC</span>
+    | <span class="dt">ENOLCK</span>
+    | <span class="dt">ENOMEM</span>
+    | <span class="dt">ENOSPC</span>
+    | <span class="dt">ENOSYS</span>
+    | <span class="dt">ENOTDIR</span>
+    | <span class="dt">ENOTEMPTY</span>
+    | <span class="dt">ENOTTY</span>
+    | <span class="dt">ENXIO</span>
+    | <span class="dt">EPERM</span>
+    | <span class="dt">EPIPE</span>
+    | <span class="dt">ERANGE</span>
+    | <span class="dt">EROFS</span>
+    | <span class="dt">ESPIPE</span>
+    | <span class="dt">ESRCH</span>
+    | <span class="dt">EXDEV</span>
+    | <span class="dt">EWOULDBLOCK</span>
+    | <span class="dt">EINPROGRESS</span>
+    | <span class="dt">EALREADY</span>
+    | <span class="dt">ENOTSOCK</span>
+    | <span class="dt">EDESTADDRREQ</span>
+    | <span class="dt">EMSGSIZE</span>
+    | <span class="dt">EPROTOTYPE</span>
+    | <span class="dt">ENOPROTOOPT</span>
+    | <span class="dt">EPROTONOSUPPORT</span>
+    | <span class="dt">ESOCKTNOSUPPORT</span>
+    | <span class="dt">EOPNOTSUPP</span>
+    | <span class="dt">EPFNOSUPPORT</span>
+    | <span class="dt">EAFNOSUPPORT</span>
+    | <span class="dt">EADDRINUSE</span>
+    | <span class="dt">EADDRNOTAVAIL</span>
+    | <span class="dt">ENETDOWN</span>
+    | <span class="dt">ENETUNREACH</span>
+    | <span class="dt">ENETRESET</span>
+    | <span class="dt">ECONNABORTED</span>
+    | <span class="dt">ECONNRESET</span>
+    | <span class="dt">ENOBUFS</span>
+    | <span class="dt">EISCONN</span>
+    | <span class="dt">ENOTCONN</span>
+    | <span class="dt">ESHUTDOWN</span>
+    | <span class="dt">ETOOMANYREFS</span>
+    | <span class="dt">ETIMEDOUT</span>
+    | <span class="dt">ECONNREFUSED</span>
+    | <span class="dt">EHOSTDOWN</span>
+    | <span class="dt">EHOSTUNREACH</span>
+    | <span class="dt">ELOOP</span>
+    | <span class="dt">EOVERFLOW</span>
+    | <span class="dt">EUNKNOWNERR</span> <span class="kw">of</span> <span class="dt">int</span>
+ 
+  <span class="co">(*</span>
+<span class="co">  type store_ref = Store_ref of int</span>
+<span class="co"> </span>
+<span class="co">  let dest_store_ref (Store_ref i) = i</span>
+<span class="co">  *)</span>
+
+  <span class="kw">type</span> name = <span class="dt">string</span> <span class="co">(* shortest component of a filename - doesn&#39;t include /; may be empty; may be . or .. *)</span>
+  
+  <span class="kw">type</span> dir_ref = <span class="dt">Dir_ref</span> <span class="kw">of</span> <span class="dt">int</span>
+
+  <span class="kw">let</span> dest_dir_ref (<span class="dt">Dir_ref</span> i) = i
+
+
+  <span class="co">(* a reference to a map of entries *)</span>
+  <span class="co">(*</span>
+<span class="co">  type entries_ref = Entries_ref of int</span>
+
+<span class="co">  let dest_entries_ref (Entries_ref i) = i</span>
+<span class="co">  *)</span>
+
+  <span class="kw">type</span> inode_ref = <span class="dt">Inode_ref</span> <span class="kw">of</span> <span class="dt">int</span>
+
+  <span class="kw">let</span> dest_inode_ref (<span class="dt">Inode_ref</span> i) = i
+
+  <span class="co">(*</span>
+<span class="co">  type file_contents_ref = File_contents_ref of int</span>
+
+<span class="co">  let dest_file_contents_ref (File_contents_ref i) = i</span>
+<span class="co">  *)</span>
+
+  <span class="co">(* directories *)</span>
+  <span class="kw">type</span> entry = (dir_ref,inode_ref) sum
+  <span class="kw">let</span> is_dir_ref_entry = is_Inl
+  <span class="kw">let</span> is_inode_ref_entry = is_Inr
+  <span class="kw">let</span> dest_dir_ref_entry = dest_Inl
+  <span class="kw">let</span> dest_inode_ref_entry = dest_Inr
+
+  <span class="ot">module</span> Entries = <span class="dt">MyMap</span>(
+    <span class="kw">struct</span> 
+      <span class="kw">type</span> key = name
+      <span class="kw">type</span> value = entry <span class="dt">option</span>
+      <span class="kw">let</span> compare = Pervasives<span class="kw">.</span>compare
+      <span class="kw">let</span> default = <span class="dt">None</span>
+      <span class="kw">let</span> is_default = (<span class="kw">fun</span> x -&gt; x=None)
+    <span class="kw">end</span>)
+
+  <span class="kw">type</span> entries = Entries<span class="kw">.</span>ty_map <span class="co">(* FIXME in spec? *)</span>
+
+  <span class="kw">type</span> dir = {
+    dentries:entries
+  }
+
+
+  <span class="co">(* inodes *)</span>
+  <span class="kw">type</span> bytes = MyDynArray<span class="kw">.</span>t
+
+  <span class="kw">type</span> file_contents = bytes <span class="co">(* really a map from index to ... *)</span>
+
+  <span class="kw">type</span> inode = {
+    fcontents:file_contents
+  }
+
+  <span class="co">(* state type *)</span>
+
+  <span class="ot">module</span> Dir_map = <span class="dt">MyMap</span>(
+    <span class="kw">struct</span> 
+      <span class="kw">type</span> key = dir_ref
+      <span class="kw">type</span> value = dir <span class="dt">option</span>
+      <span class="kw">let</span> compare = Pervasives<span class="kw">.</span>compare
+      <span class="kw">let</span> default = <span class="dt">None</span>
+      <span class="kw">let</span> is_default = (<span class="kw">fun</span> x -&gt; x=None)
+    <span class="kw">end</span>)
+
+  <span class="ot">module</span> Inode_map = <span class="dt">MyMap</span>(
+    <span class="kw">struct</span>
+      <span class="kw">type</span> key = inode_ref
+      <span class="kw">type</span> value = inode <span class="dt">option</span>
+      <span class="kw">let</span> compare = Pervasives<span class="kw">.</span>compare
+      <span class="kw">let</span> default = <span class="dt">None</span>
+      <span class="kw">let</span> is_default = (<span class="kw">fun</span> x -&gt; x=None)
+    <span class="kw">end</span>)
+
+  <span class="kw">type</span> state = {
+    dirs:Dir_map.ty_map;
+    <span class="co">(* entries:Entries_map.ty_map; *)</span>
+    inodes:Inode_map.ty_map;
+    <span class="co">(* contents:Contents_map.ty_map *)</span>
+  }
+
+  <span class="kw">let</span> state0 = {
+    dirs=Dir_map.empty;
+    inodes=Inode_map.empty;
+    <span class="co">(* entries=Entries_map.empty;</span>
+<span class="co">    contents=Contents_map.empty *)</span>
+  }
+
+  <span class="kw">type</span> ret_value = <span class="dt">None1</span> | <span class="dt">Int1</span> <span class="kw">of</span> <span class="dt">int</span> | <span class="dt">Bytes1</span> <span class="kw">of</span> bytes <span class="co">(* FIXME add init return type *)</span> | <span class="dt">Names1</span> <span class="kw">of</span> name <span class="dt">list</span>
+    | <span class="dt">Stats1</span> <span class="kw">of</span> Unix<span class="kw">.</span>LargeFile<span class="kw">.</span>stats
+  <span class="kw">let</span> dest_bytes1 (<span class="dt">Bytes1</span> bs) = bs
+
+
+  <span class="co">(* return type for functions on state *)</span>
+  <span class="co">(*</span>
+<span class="co">  type ty_return = {</span>
+<span class="co">    state1: state;</span>
+<span class="co">    ret1: ret_value; </span>
+<span class="co">    err1: error option</span>
+<span class="co">  } </span>
+<span class="co">  *)</span>  
+ 
+  <span class="co">(* names types; also type name earlier *)</span>
+
+  <span class="co">(* following moved from ops parser *)</span>
+  <span class="kw">type</span> dirname = <span class="dt">string</span> <span class="dt">list</span>
+  <span class="kw">type</span> filename = <span class="dt">string</span> <span class="dt">list</span> <span class="co">(* non-empty *)</span>
+
+  <span class="co">(* the type of parsed paths; what is important is whether the name ends with a slash *)</span>
+  <span class="kw">type</span> ty_name_list2 = {
+    ns2: name <span class="dt">list</span>;
+    ends_with_slash2: <span class="dt">bool</span>; 
+  }
+
+  <span class="co">(* we cannot supply Fname from user space: a name /tmp/tmp.txt may refer to a file or a dir *)</span>
+  <span class="co">(* resolved name *)</span>
+  <span class="co">(* type rname1 = Dname1 of name list | Fordname1 of name list *)</span>
+  <span class="co">(* resolved name relative to a state *)</span>
+  <span class="kw">type</span> rname2 = 
+    <span class="dt">Dname2</span> <span class="kw">of</span> (dir_ref * dir) * ty_name_list2 
+  | <span class="dt">Fname2</span> <span class="kw">of</span> (inode_ref * inode) * ty_name_list2 
+  | <span class="dt">None2</span> <span class="kw">of</span> ty_name_list2
+  | <span class="dt">Err2</span> <span class="kw">of</span> (inode_ref * inode) * ty_name_list2 
+  <span class="co">(* invariant: if Fname2 ns, then not (ns.ends_with_slash2) *)</span>
+  <span class="co">(* invariant: if Err2 then ns.ends_with_slash2 *)</span>
+  <span class="co">(* FIXME since these are resolved, we may want to include the i0_ref and d0_ref *)</span>
+
+  <span class="kw">let</span> is_Err2 x = (<span class="kw">match</span> x <span class="kw">with</span> | <span class="dt">Err2</span> _ -&gt; <span class="kw">true</span> | _ -&gt; <span class="kw">false</span>)
+
+  <span class="kw">let</span> name_list_of_rname2 n = (<span class="kw">match</span> n <span class="kw">with</span> 
+    | <span class="dt">Dname2</span> (_,ns) -&gt; ns
+    | <span class="dt">Fname2</span> (_,ns) -&gt; ns
+    | <span class="dt">None2</span> ns -&gt; ns
+    | <span class="dt">Err2</span> (_,ns) -&gt; ns)
+ 
+  <span class="kw">let</span> string_of_rname2 n = (
+    <span class="kw">let</span> ns = name_list_of_rname2 n <span class="kw">in</span>
+    ((String<span class="kw">.</span>concat <span class="st">&quot;/&quot;</span> ns.ns2)^(<span class="kw">if</span> ns.ends_with_slash2 <span class="kw">then</span> <span class="st">&quot;/&quot;</span> <span class="kw">else</span> <span class="st">&quot;&quot;</span>)))
+
+  <span class="kw">let</span> is_None2 x = (<span class="kw">match</span> x <span class="kw">with</span> <span class="dt">None2</span> _ -&gt; <span class="kw">true</span> | _ -&gt; <span class="kw">false</span>)
+
+
+
+  <span class="co">(* </span>
+<span class="co">  type ty_op = </span>
+<span class="co">      LN of filename * dirname * name</span>
+<span class="co">    | UNLINK of dirname * name</span>
+<span class="co">    | MKDIR of dirname * name </span>
+<span class="co">    | RMDIR of dirname * name</span>
+<span class="co">    | TOUCH of dirname * name</span>
+<span class="co">    | RM of dirname * name</span>
+<span class="co">    | MVDIR of dirname * name * dirname * name</span>
+<span class="co">    | MV of dirname * name * dirname * name</span>
+<span class="co">    | CP of filename * dirname * name</span>
+<span class="co">    | CPDIR of dirname * dirname * name</span>
+<span class="co">    | WRITE of filename * string</span>
+<span class="co">    | WRITE64 of filename * int * string (* int is offset, string is base64 encoded data *)</span>
+<span class="co">  *)</span>
+
+  <span class="kw">type</span> ty_return2 = {
+    state2: state;
+    ret2: ret_value;
+  } 
+  <span class="kw">let</span> return s = { state2=s; ret2=None1 }
+
+
+
+  <span class="co">(* from unix.mli *)</span>
+  <span class="kw">type</span> open_flag =
+      <span class="dt">O_RDONLY</span>                    <span class="co">(** Open for reading *)</span>
+    | <span class="dt">O_WRONLY</span>                    <span class="co">(** Open for writing *)</span>
+    | <span class="dt">O_RDWR</span>                      <span class="co">(** Open for reading and writing *)</span>
+    | <span class="dt">O_NONBLOCK</span>                  <span class="co">(** Open in non-blocking mode *)</span>
+    | <span class="dt">O_APPEND</span>                    <span class="co">(** Open for append *)</span>
+    | <span class="dt">O_CREAT</span>                     <span class="co">(** Create if nonexistent *)</span>
+    | <span class="dt">O_TRUNC</span>                     <span class="co">(** Truncate to 0 length if existing *)</span>
+    | <span class="dt">O_EXCL</span>                      <span class="co">(** Fail if existing *)</span>
+    | <span class="dt">O_NOCTTY</span>                    <span class="co">(** Don&#39;t make this dev a controlling tty *)</span>
+    | <span class="dt">O_DSYNC</span>                     <span class="co">(** Writes complete as `Synchronised I/O data</span>
+<span class="co">                                     integrity completion&#39; *)</span>
+    | <span class="dt">O_SYNC</span>                      <span class="co">(** Writes complete as `Synchronised I/O file</span>
+<span class="co">                                     integrity completion&#39; *)</span>
+    | <span class="dt">O_RSYNC</span>                     <span class="co">(** Reads complete as writes (depending on</span>
+<span class="co">                                     O_SYNC/O_DSYNC) *)</span>
+    | <span class="dt">O_SHARE_DELETE</span>              <span class="co">(** Windows only: allow the file to be deleted</span>
+<span class="co">                                   while still open *)</span>
+
+  <span class="kw">type</span> file_perm = <span class="dt">int</span>
+
+  <span class="co">(* top-level labels, intended to mirror the syscalls, but with functional interface; TODO need to incorporate file descriptors, &quot;current position&quot; etc *)</span>
+  <span class="kw">type</span> ty_label = 
+    | <span class="dt">LINK</span> <span class="kw">of</span> (<span class="dt">string</span> * <span class="dt">string</span>)
+    | <span class="dt">MKDIR</span> <span class="kw">of</span> (<span class="dt">string</span> * file_perm)
+    | <span class="dt">OPEN</span> <span class="kw">of</span> (<span class="dt">string</span> * open_flag <span class="dt">list</span>)
+    | <span class="dt">READ</span> <span class="kw">of</span> (<span class="dt">string</span> * <span class="dt">int</span> * <span class="dt">int</span>)
+    | <span class="dt">READDIR</span> <span class="kw">of</span> <span class="dt">string</span>
+    | <span class="dt">RENAME</span> <span class="kw">of</span> (<span class="dt">string</span> * <span class="dt">string</span>)
+    | <span class="dt">RMDIR</span> <span class="kw">of</span> <span class="dt">string</span>
+    | <span class="dt">STAT</span> <span class="kw">of</span> <span class="dt">string</span>
+    | <span class="dt">TRUNCATE</span> <span class="kw">of</span> (<span class="dt">string</span> * <span class="dt">int</span>)
+    | <span class="dt">UNLINK</span> <span class="kw">of</span> <span class="dt">string</span>
+    | <span class="dt">WRITE</span> <span class="kw">of</span> (<span class="dt">string</span> * <span class="dt">int</span> * bytes * <span class="dt">int</span>)
+
+
+<span class="kw">end</span></code></pre>
+<h2 id="lifting-basic-functions-to-state"><a href="#lifting-basic-functions-to-state">Lifting basic functions to state</a></h2>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+<span class="ot">module</span> Lift = <span class="kw">struct</span>
+
+  <span class="ot">open</span> Fs_types
+
+  <span class="co">(* these update the actual maps *)</span>
+
+  <span class="kw">let</span> update_dirs s k v = {s <span class="kw">with</span> dirs=(Dir_map<span class="kw">.</span>add k v s.dirs) }
+  <span class="kw">let</span> (_:state -&gt; dir_ref -&gt; dir <span class="dt">option</span> -&gt; state) = update_dirs
+    
+  <span class="co">(*</span>
+<span class="co">  let update_entries s k v = {s with entries=(Entries_map.add k v s.entries) }</span>
+<span class="co">  let (_:state -&gt; entries_ref -&gt; Entries.ty_map option -&gt; state) = update_entries</span>
+<span class="co">  *)</span>
+
+  <span class="kw">let</span> update_inodes s k v = {s <span class="kw">with</span> inodes=(Inode_map<span class="kw">.</span>add k v s.inodes) }
+  <span class="kw">let</span> (_:state -&gt; inode_ref -&gt; inode <span class="dt">option</span> -&gt; state) = update_inodes
+
+  <span class="co">(*</span>
+<span class="co">  let update_contents s k v = {s with contents=(Contents_map.add k v s.contents) }</span>
+<span class="co">  let (_:state -&gt; file_contents_ref -&gt; bytes option -&gt; state) = update_contents</span>
+<span class="co">  *)</span>
+
+  <span class="co">(* common case is to update with Some *)</span>
+  <span class="kw">let</span> update_drs_some s (k,v) = (update_dirs s k (<span class="dt">Some</span> v))
+  <span class="kw">let</span> update_inds_some s (k,v) = (update_inodes s k (<span class="dt">Some</span> v))
+  <span class="co">(*</span>
+<span class="co">  let update_ents_some s (k,v) = (update_entries s k (Some v))</span>
+<span class="co">  let update_cnts_some s (k,v) = (update_contents s k (Some v))</span>
+<span class="co">  *)</span>
+  
+  <span class="co">(* lift find2 *)</span>
+  <span class="kw">let</span> lookup_dir s k = Dir_map<span class="kw">.</span>find2 k s.dirs
+  <span class="kw">let</span> (_:state -&gt; dir_ref -&gt; dir <span class="dt">option</span>) = lookup_dir
+
+  <span class="co">(*</span>
+<span class="co">  let lookup_entries s k = Entries_map.find2 k s.entries</span>
+<span class="co">  let (_:state -&gt; entries_ref -&gt; Entries.ty_map option) = lookup_entries</span>
+<span class="co">  *)</span>
+
+  <span class="kw">let</span> lookup_inode s k = Inode_map<span class="kw">.</span>find2 k s.inodes
+  <span class="kw">let</span> (_:state -&gt; inode_ref -&gt; inode <span class="dt">option</span>) = lookup_inode
+
+  <span class="co">(* these add entries to the maps *)</span>
+  
+  <span class="co">(* r is an entries_ref *)</span>
+  <span class="kw">let</span> update_ents_pointwise s (d0_ref,d0) k v = (
+    <span class="kw">let</span> m = d0.dentries <span class="kw">in</span>
+    <span class="kw">let</span> m&#39; = Entries<span class="kw">.</span>add k v m <span class="kw">in</span>
+    <span class="kw">let</span> s&#39; = update_drs_some s (d0_ref,{d0 <span class="kw">with</span> dentries=m&#39;}) <span class="kw">in</span>
+    s&#39;)
+  <span class="kw">let</span> (_:state -&gt; (dir_ref * dir) -&gt; name -&gt; entry <span class="dt">option</span> -&gt; state) = update_ents_pointwise
+
+  <span class="co">(* FIXME note that a dir_ref and an inode_ref can have the same underlying number, but this is not typically allowed in standard filesystems (at least in a single fs) *)</span>
+
+  <span class="co">(* FIXME want to use new_dir, not this *)</span>
+  <span class="kw">let</span> _FIXME_new_dir_ref s = (
+    <span class="kw">let</span> binds = Dir_map<span class="kw">.</span>bindings s.dirs <span class="kw">in</span>
+    <span class="kw">let</span> binds = List<span class="kw">.</span>map (<span class="kw">fun</span> (k,v) -&gt; dest_dir_ref k) binds <span class="kw">in</span>
+    <span class="kw">let</span> max = List<span class="kw">.</span>fold_left (<span class="kw">fun</span> m -&gt; <span class="kw">fun</span> r -&gt; max m r) 0 binds <span class="kw">in</span>
+    <span class="dt">Dir_ref</span>(max+1))
+ 
+  <span class="kw">let</span> new_dir s0 = (
+    <span class="kw">let</span> d0_ref = _FIXME_new_dir_ref s0 <span class="kw">in</span>
+    <span class="kw">let</span> d0 = { dentries = Entries<span class="kw">.</span>empty } <span class="kw">in</span>
+    <span class="kw">let</span> s0 = update_drs_some s0 (d0_ref,d0) <span class="kw">in</span>
+    (s0,(d0_ref,d0)))
+
+  <span class="co">(*</span>
+<span class="co">  let new_entries_ref s = (</span>
+<span class="co">    let binds = Entries_map.bindings s.entries in</span>
+<span class="co">    let binds = List.map (fun (k,v) -&gt; dest_entries_ref k) binds in</span>
+<span class="co">    let max = List.fold_left (fun m -&gt; fun r -&gt; max m r) 0 binds in</span>
+<span class="co">    Entries_ref(max+1))</span>
+<span class="co">  *)</span>
+
+  <span class="kw">let</span> _FIXME_new_inode_ref s = (
+    <span class="kw">let</span> binds = Inode_map<span class="kw">.</span>bindings s.inodes <span class="kw">in</span>
+    <span class="kw">let</span> binds = List<span class="kw">.</span>map (<span class="kw">fun</span> (k,v) -&gt; dest_inode_ref k) binds <span class="kw">in</span>
+    <span class="kw">let</span> max = List<span class="kw">.</span>fold_left (<span class="kw">fun</span> m -&gt; <span class="kw">fun</span> r -&gt; max m r) 0 binds <span class="kw">in</span>
+    <span class="dt">Inode_ref</span>(max+1))
+
+  <span class="kw">let</span> new_inode s0 = (
+    <span class="kw">let</span> i0_ref = _FIXME_new_inode_ref s0 <span class="kw">in</span>
+    <span class="kw">let</span> i0 = { fcontents=(MyDynArray<span class="kw">.</span>create ()) } <span class="kw">in</span>
+    <span class="kw">let</span> s0 = update_inds_some s0 (i0_ref,i0) <span class="kw">in</span>
+    (s0,(i0_ref,i0)))
+  
+
+  <span class="co">(*</span>
+<span class="co">  let new_contents_ref s = (</span>
+<span class="co">    let binds = Contents_map.bindings s.contents in</span>
+<span class="co">    let binds = List.map (fun (k,v) -&gt; dest_file_contents_ref k) binds in</span>
+<span class="co">    let max = List.fold_left (fun m -&gt; fun r -&gt; max m r) 0 binds in</span>
+<span class="co">    File_contents_ref(max+1))</span>
+<span class="co">  *)</span>   
+<span class="kw">end</span></code></pre>
+<h2 id="common-functions"><a href="#common-functions">Common functions</a></h2>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+<span class="ot">module</span> Common = <span class="kw">struct</span>
+  
+  <span class="ot">open</span> Prelude
+  <span class="ot">open</span> Fs_types
+  <span class="ot">open</span> Lift    
+
+  <span class="kw">let</span> string_of_entry e = (
+    <span class="kw">let</span> i = (<span class="kw">match</span> e <span class="kw">with</span>
+    | <span class="dt">Inl</span> dref -&gt; (string_of_int (dest_dir_ref dref))
+    | <span class="dt">Inr</span> iref -&gt; (string_of_int (dest_inode_ref iref)))
+    <span class="kw">in</span>
+    <span class="st">&quot;(&quot;</span>^i^<span class="st">&quot;)&quot;</span>)
+
+  <span class="kw">let</span> <span class="kw">rec</span> string_of_dir s dirname dir = (
+    <span class="kw">let</span> e = (dir.dentries) <span class="kw">in</span>
+    <span class="kw">let</span> bindings = Entries<span class="kw">.</span>bindings e <span class="kw">in</span>
+    <span class="kw">let</span> this_dir = (String<span class="kw">.</span>concat <span class="st">&quot;</span><span class="ch">\n</span><span class="st">&quot;</span> (List<span class="kw">.</span>map (<span class="kw">fun</span> (k,<span class="dt">Some</span> v) -&gt; k^(string_of_entry v)) bindings)) <span class="kw">in</span>    
+    <span class="kw">let</span> this_dir = <span class="kw">if</span> bindings &lt;&gt; [] <span class="kw">then</span> this_dir ^ <span class="st">&quot;</span><span class="ch">\n</span><span class="st">&quot;</span> <span class="kw">else</span> this_dir <span class="kw">in</span>
+    <span class="kw">let</span> other_dirs = List<span class="kw">.</span>filter (<span class="kw">fun</span> (k,v) -&gt; is_Some v &amp;&amp; is_dir_ref_entry (dest_Some v)) bindings <span class="kw">in</span>
+    <span class="kw">let</span> others = List<span class="kw">.</span>map (<span class="kw">fun</span> (k,<span class="dt">Some</span> v) -&gt; string_of_dir s (k^(string_of_entry v)) (dest_Some (lookup_dir s (dest_dir_ref_entry v)))) other_dirs <span class="kw">in</span>
+    <span class="st">&quot;Directory &quot;</span>^dirname^<span class="st">&quot;:</span><span class="ch">\n</span><span class="st">&quot;</span>
+    ^ this_dir
+    ^ (String<span class="kw">.</span>concat <span class="st">&quot;&quot;</span> others))
+    
+  <span class="co">(* assume no cycles *)</span>
+  <span class="kw">let</span> string_of_state s = (
+    <span class="kw">let</span> <span class="dt">Some</span>(root) = lookup_dir s (<span class="dt">Dir_ref</span> 0) <span class="kw">in</span>
+    (string_of_dir s <span class="st">&quot;/&quot;</span> root))
+
+<span class="kw">end</span></code></pre>
+<h2 id="fs_ops1"><a href="#fs_ops1"><code>Fs_ops1</code></a></h2>
+<p>Implement the basic file system operations</p>
+<p>List of all operations involved in dependencies:</p>
+<ul>
+<li>creation of a <code>dir_ref</code> can be dependent on creation of a new entries (eg <code>mkdir</code>)</li>
+<li><code>update_ents_pointwise</code> (<code>internal_link_dir</code> or <code>internal_link_file</code>) can be dependent on creation of a new <code>dir_ref</code> (and writing of that <code>dir_ref</code> into <code>s0.dirs</code>) (eg <code>mkdir</code>)</li>
+<li><code>internal_link_dir</code> can be dependent on <code>update_ents_pointwise</code> (eg <code>mkdir</code>)</li>
+<li>creation of a new <code>inode_ref</code> can be dependent on creation of a new <code>file_contents</code> (eg touch)</li>
+</ul>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+<span class="ot">module</span> Fs_ops1 = <span class="kw">struct</span>
+
+  <span class="ot">open</span> Prelude
+  <span class="ot">open</span> Fs_types
+  <span class="ot">open</span> Lift
+  <span class="ot">open</span> Common
+
+  <span class="co">(* an initial state with a root dir *)</span>
+  <span class="kw">let</span> root = (<span class="dt">Dir_ref</span> 0, { dentries=Entries.empty }) 
+
+  <span class="kw">let</span> state0 = (
+    <span class="kw">let</span> s0 = update_drs_some state0 root <span class="kw">in</span>
+    s0)  
+
+  <span class="kw">let</span> get_dir s0 d0_ref = (
+    <span class="kw">let</span> <span class="dt">Some</span>(d0) = lookup_dir s0 d0_ref <span class="kw">in</span>
+    d0)
+
+  <span class="kw">let</span> get_inode s0 i0_ref = (
+    <span class="kw">let</span> <span class="dt">Some</span>(i0) = lookup_inode s0 i0_ref <span class="kw">in</span>
+    i0)
+
+  <span class="co">(*</span>
+<span class="co">  let get_entries s0 es0_ref = (</span>
+<span class="co">    let Some(es0) = lookup_entries s0 es0_ref in</span>
+<span class="co">    es0)</span>
+<span class="co">  *)</span>
+
+  <span class="co">(* FIXME may prefer a version that returns a (ref,obj) option ; see eg mvdir *)</span>
+  <span class="kw">let</span> resolve1 s0 (d0_ref,d0) name = (
+    <span class="kw">let</span> m = d0.dentries <span class="kw">in</span>
+    Entries<span class="kw">.</span>find2 name m)
+  <span class="kw">let</span> (_:state -&gt; (dir_ref * dir) -&gt; name -&gt; entry <span class="dt">option</span>) = resolve1</code></pre>
+<div style='background-color:#FFFFCC'>
+<h3 id="internal_link_dir"><a href="#internal_link_dir"><code>internal_link_dir</code></a></h3>
+<table>
+<tbody>
+<tr class="odd">
+<td align="left">Name</td>
+<td align="left"><code>internal_link_dir</code></td>
+</tr>
+<tr class="even">
+<td align="left">Type</td>
+<td align="left">Auxiliary (not available to users)</td>
+</tr>
+<tr class="odd">
+<td align="left">Description</td>
+<td align="left">Link directory d1 into d0 under name</td>
+</tr>
+</tbody>
+</table>
+<p>Dependencies:</p>
+<ul>
+<li><p>Before the on-disk change to <code>d0.entries</code>, <code>d1</code> must be on-disk at <code>d1_ref</code>. By extension, <code>d1.dentries</code> must point to a valid entries block, but this need not be synced (up to date).</p></li>
+<li><p><code>d0</code> need not even be on disk. But then if we ever write the newest version of <code>d0.entries</code> to disk, which contains <code>d1_ref</code>, clearly <code>d1_ref</code> needs to be on disk. So for the updated version of <code>d0.entries</code>, there is a dependency to <code>d1_ref</code>. Clearly future changes to <code>d1</code> must be picked up via <code>d1_ref</code>. But we do not need to have a dependency to the latest version of <code>d1_ref</code> (but in fact, <code>d1_ref</code> isn't versioned? it is supposed to represent a persistent reference to a directory; it must exist, but needn't be the latest version of that directory?)</p></li>
+</ul>
+<p>In general, what things are versioned? Not <code>d_ref</code>. But directories (which can change attributes etc, not modelled here) and directory entries in particular, and file contents. And inodes (which can change attribtes etc, not modelled here) but not <code>inode_ref</code>.</p>
+<ul>
+<li><code>d1_ref</code> must exist, and be valid (reference a valid directory)</li>
+<li><code>d1</code> should be the in-mem version current at the time the <code>internal_link_dir</code> call was made (or any later version?). On-disk, <code>d1</code> may be some way behind when the link is written. Or maybe not? Suppose we make changes to <code>d1</code>, then link into <code>d0</code>. Suppose <code>d0</code> gets updated on disk; does it have to point to an updated <code>d1</code>? Or can it point to an older version of <code>d1</code>? Probably it can point to an older version of <code>d1</code> (the model is that <code>d1</code> had operations pending on it, but <code>d0</code> was updated to point to <code>d1</code>).</li>
+<li><code>d0.entries</code> gets a new version. On-disk, <code>d0.entries</code> may lag.</li>
+</ul>
+<p>Pending ops:</p>
+<ul>
+<li><code>d0.entries</code> can have a pending op to add an entry</li>
+</ul>
+<p>Atomicity: should be a single atomic action</p>
+</div>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="co">(* link directory d1 into d0 under name *)</span>
+  <span class="kw">let</span> internal_link_dir s0 (d0_ref,d0) (d1_ref,d1) name = (
+    <span class="kw">let</span> s0 = update_ents_pointwise s0 (d0_ref,d0) name (<span class="dt">Some</span>(<span class="dt">Inl</span>(d1_ref))) <span class="kw">in</span>
+    s0)
+  <span class="kw">let</span> (_:state -&gt; (dir_ref * dir) -&gt; (dir_ref * dir) -&gt; name -&gt; state) = internal_link_dir
+
+  <span class="kw">let</span> internal_unlink s0 (d0_ref,d0) name = (
+    <span class="kw">let</span> s0 = update_ents_pointwise s0 (d0_ref,d0) name <span class="dt">None</span> <span class="kw">in</span>
+    s0)
+  <span class="kw">let</span> (_:state -&gt; (dir_ref * dir) -&gt; name -&gt; state) = internal_unlink
+</code></pre>
+<div style='background-color:#FFFFCC'>
+<h3 id="internal_link_file"><a href="#internal_link_file"><code>internal_link_file</code></a></h3>
+<table>
+<tbody>
+<tr class="odd">
+<td align="left">Name</td>
+<td align="left"><code>internal_link_file</code></td>
+</tr>
+<tr class="even">
+<td align="left">Type</td>
+<td align="left">Auxiliary (not available to users) FIXME it is in some form</td>
+</tr>
+<tr class="odd">
+<td align="left">Description</td>
+<td align="left">Link file i1 into d0 under name</td>
+</tr>
+</tbody>
+</table>
+<p>Dependencies:</p>
+<ul>
+<li><p>Before the on-disk change to <code>d0.entries</code>, <code>i1</code> must be on-disk at <code>i1_ref</code>. By extension, whatever contents <code>i1</code> points to must be valid on disk, but need not be synced.</p></li>
+<li><p>As <code>internal_link_dir</code>, <code>i0</code> need not be on disk.</p></li>
+</ul>
+<p>Pending ops:</p>
+<ul>
+<li><code>d0.entries</code> as <code>internal_link_dir</code></li>
+</ul>
+<p>Atomicity: single atomic op</p>
+</div>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="kw">let</span> internal_link_file s0 (i1_ref,i1) (d0_ref,d0) name = (
+    <span class="kw">let</span> s0 = update_ents_pointwise s0 (d0_ref,d0) name (<span class="dt">Some</span>(<span class="dt">Inr</span>(i1_ref))) <span class="kw">in</span>
+    s0)
+  <span class="kw">let</span> (_:state -&gt; (inode_ref * inode) -&gt; (dir_ref * dir) -&gt; name -&gt; state) = internal_link_file
+</code></pre>
+<div style='background-color:#FFFFCC'>
+<h3 id="link_file"><a href="#link_file"><code>link_file</code></a></h3>
+<table>
+<tbody>
+<tr class="odd">
+<td align="left">Name</td>
+<td align="left"><code>link_file</code></td>
+</tr>
+<tr class="even">
+<td align="left">Type</td>
+<td align="left">User function</td>
+</tr>
+<tr class="odd">
+<td align="left">Description</td>
+<td align="left">Link file i1 into d0 under name</td>
+</tr>
+</tbody>
+</table>
+<p>Dependencies:</p>
+<p>Pending ops:</p>
+<p>Atomicity: single atomic op</p>
+</div>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="kw">let</span> link_file s0 (i1_ref,i1) (d0_ref,d0) name = (
+    <span class="kw">let</span> s0 = internal_link_file s0 (i1_ref,i1) (d0_ref,d0) name <span class="kw">in</span>
+    return s0)
+  <span class="kw">let</span> (_:state -&gt; (inode_ref * inode) -&gt; (dir_ref * dir) -&gt; name -&gt; ty_return2) = link_file</code></pre>
+<div style='background-color:#FFFFCC'>
+<h3 id="unlink"><a href="#unlink"><code>unlink</code></a></h3>
+<table>
+<tbody>
+<tr class="odd">
+<td align="left">Name</td>
+<td align="left"><code>unlink</code></td>
+</tr>
+<tr class="even">
+<td align="left">Type</td>
+<td align="left">User function</td>
+</tr>
+<tr class="odd">
+<td align="left">Function</td>
+<td align="left">Remove entry <code>name</code> from <code>d0</code></td>
+</tr>
+</tbody>
+</table>
+<p>Dependencies:</p>
+<ul>
+<li>Do we require <code>d0_ref</code> and <code>d0</code> to be synced, or even on-disk? No. We are just creating a new version of <code>d0.entries</code>, which can be synced later.</li>
+</ul>
+<p>Pending ops:</p>
+<ul>
+<li><code>d0.entries</code> as <code>internal_link_dir</code></li>
+</ul>
+<p>Atomicity: single atomic op</p>
+</div>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="kw">let</span> unlink s0 (d0_ref,d0) name = (
+    <span class="kw">let</span> s0 = update_ents_pointwise s0 (d0_ref,d0) name <span class="dt">None</span> <span class="kw">in</span>
+    return s0)
+  <span class="kw">let</span> (_:state -&gt; dir_ref * dir -&gt; name -&gt; ty_return2) = unlink</code></pre>
+<div style='background-color:#FFFFCC'>
+<h3 id="mkdir"><a href="#mkdir"><code>mkdir</code></a></h3>
+<table>
+<tbody>
+<tr class="odd">
+<td align="left">Name</td>
+<td align="left"><code>mkdir</code></td>
+</tr>
+<tr class="even">
+<td align="left">Type</td>
+<td align="left">User function</td>
+</tr>
+<tr class="odd">
+<td align="left">Function</td>
+<td align="left">Create a new directory under <code>name</code> in <code>d0</code></td>
+</tr>
+</tbody>
+</table>
+<p>Dependencies:</p>
+<ul>
+<li>the new dir <code>d</code> depends on the new entries <code>d_entries</code></li>
+<li>the updated version of <code>d0</code> depends on <code>d</code></li>
+</ul>
+<p>Pending ops:</p>
+<ul>
+<li>the state: create a new entry</li>
+<li>the state: create a new dir</li>
+<li>as <code>internal_link_dir</code></li>
+</ul>
+<p>So the modification of <code>d0.entries</code> has dependency on create-a-new-dir, which has a dependency on create-a-new-entry</p>
+<p>Atomicity: single atomic op</p>
+</div>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="co">(* FIXME assumes name doesn&#39;t exist *)</span>
+
+  <span class="kw">let</span> mkdir s0 (d0_ref,d0) name = (
+    <span class="kw">let</span> (s0,(d1_ref,d1)) = new_dir s0 <span class="kw">in</span>
+    <span class="co">(* link d1 into d0 *)</span>
+    <span class="kw">let</span> s0 = internal_link_dir s0 (d0_ref,d0) (d1_ref,d1) name <span class="kw">in</span>
+    return s0)
+  <span class="kw">let</span> (_:state -&gt; dir_ref * dir -&gt; name -&gt; ty_return2) = mkdir</code></pre>
+<div style='background-color:#FFFFCC'>
+<h3 id="rmdir"><a href="#rmdir"><code>rmdir</code></a></h3>
+<table>
+<tbody>
+<tr class="odd">
+<td align="left">Name</td>
+<td align="left"><code>rmdir</code></td>
+</tr>
+<tr class="even">
+<td align="left">Type</td>
+<td align="left">User function</td>
+</tr>
+<tr class="odd">
+<td align="left">Function</td>
+<td align="left">Remove a directory <code>name</code> in <code>d0</code></td>
+</tr>
+</tbody>
+</table>
+<p>See <code>unlink</code></p>
+</div>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="co">(* also works for files *)</span>
+  <span class="kw">let</span> rmdir s0 (d0_ref,d0) name = (unlink s0 (d0_ref,d0) name)
+  <span class="kw">let</span> (_:state -&gt; dir_ref * dir -&gt; name -&gt; ty_return2) = rmdir</code></pre>
+<div style='background-color:#FFFFCC'>
+<h3 id="touch"><a href="#touch"><code>touch</code></a></h3>
+<table>
+<tbody>
+<tr class="odd">
+<td align="left">Name</td>
+<td align="left"><code>touch</code></td>
+</tr>
+<tr class="even">
+<td align="left">Type</td>
+<td align="left">User function</td>
+</tr>
+<tr class="odd">
+<td align="left">Function</td>
+<td align="left">Add a file <code>name</code> in <code>d0</code></td>
+</tr>
+</tbody>
+</table>
+<p>Dependencies:</p>
+<ul>
+<li>the new <code>d0.entries</code> depends on the creation of the new inode</li>
+</ul>
+<p>Pending ops:</p>
+<ul>
+<li>the state: the creation of the new inode</li>
+<li><code>d0.entries</code>: modification, depends on creation of new inode</li>
+</ul>
+<p>Atomicity: single atomic op ; the creation of the new inode might conceivably be separate from the link (eg resource exhaustion observed from another thread after inode allocated, but before file linked in - probably a very rarely observed event! also, we probably are quite loose on resource exhaustion, so this observed sequence could be explained by some other behaviour eg file allocated and deleted, but space not reclaimed)</p>
+</div>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="co">(* FIXME assumes name doesn&#39;t exist; otherwise leave as is FIXME at moment it overwrites *)</span>
+
+  <span class="kw">let</span> touch s0 (d0_ref,d0) name = (
+    <span class="kw">let</span> (s0,(i0_ref,i0)) = new_inode s0 <span class="kw">in</span>
+    <span class="co">(* link i0 into d0 *)</span>
+    <span class="kw">let</span> s0 = internal_link_file s0 (i0_ref,i0) (d0_ref,d0) name <span class="kw">in</span>
+    return s0)
+  <span class="kw">let</span> (_:state -&gt; dir_ref * dir -&gt; name -&gt; ty_return2) = touch</code></pre>
+<div style='background-color:#FFFFCC'>
+<h3 id="rm"><a href="#rm"><code>rm</code></a></h3>
+<table>
+<tbody>
+<tr class="odd">
+<td align="left">Name</td>
+<td align="left"><code>rm</code></td>
+</tr>
+<tr class="even">
+<td align="left">Type</td>
+<td align="left">User function</td>
+</tr>
+<tr class="odd">
+<td align="left">Function</td>
+<td align="left">As <code>unlink</code></td>
+</tr>
+</tbody>
+</table>
+</div>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="kw">let</span> rm s0 (d0_ref,d0) name = (unlink s0 (d0_ref,d0) name)
+  <span class="kw">let</span> (_:state -&gt; dir_ref * dir -&gt; name -&gt; ty_return2) = rm</code></pre>
+<div style='background-color:#FFFFCC'>
+<h3 id="mvdir"><a href="#mvdir"><code>mvdir</code></a></h3>
+<table>
+<tbody>
+<tr class="odd">
+<td align="left">Name</td>
+<td align="left"><code>mvdir</code></td>
+</tr>
+<tr class="even">
+<td align="left">Type</td>
+<td align="left">User function</td>
+</tr>
+<tr class="odd">
+<td align="left">Function</td>
+<td align="left">Move dir <code>d0/name0</code> to <code>d1/name1</code></td>
+</tr>
+</tbody>
+</table>
+<p>Dependencies:</p>
+<ul>
+<li>the <code>rmdir</code> depends on the <code>internal_link_dir</code>: the directory must be linked in before the old ref is removed</li>
+</ul>
+<p>Pending ops:</p>
+<ul>
+<li><code>d1.dentries</code>: the newly linked in directory</li>
+<li><code>d0.dentries</code>: the removal of the old directory</li>
+</ul>
+<p>Atomicity:</p>
+<ul>
+<li><p>on non-journalled filesystems, this is likely two atomic ops: the link into <code>d1</code> and the removal from <code>d0</code>; this may (?) produce a directory that is linked to multiple times (possibly allowing a bug: if one link is removed, and the space for the dir reclaimed, the other link may give a dangling pointer)</p></li>
+<li><p>on journalled filesystems, this is supposed to be atomic</p></li>
+</ul>
+<p>FIXME should not be able to mv b b/c (move a dir to a subdir) - how is this check implemented in linux?</p>
+</div>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="co">(* FIXME change rm and mvdir linkdir to work with files or dirs *)</span>
+  <span class="co">(* cannot mvdir a b.txt; cannot mvdir a b if b is not empty *)</span>
+  <span class="co">(* FIXME name0 maynot be dir, may not exist FIXME check all uses of dest_dir_ref_entry *)</span>
+  <span class="co">(* note doesn&#39;t check status of name1 - just does the link *)</span>
+  <span class="kw">let</span> mvdir s0 (d0_ref,d0) name0 (d1_ref,d1) name1 = (
+    <span class="kw">let</span> <span class="dt">Some</span>(entry) = resolve1 s0 (d0_ref,d0) name0 <span class="kw">in</span>
+    <span class="kw">let</span> dir_ref = dest_dir_ref_entry entry <span class="kw">in</span>
+    <span class="kw">let</span> dir = get_dir s0 dir_ref <span class="kw">in</span>
+    <span class="kw">let</span> s0 = internal_link_dir s0 (d1_ref,d1) (dir_ref,dir) name1 <span class="kw">in</span>
+    <span class="kw">let</span> s0 = internal_unlink s0 (d0_ref,d0) name0 <span class="kw">in</span> 
+    return s0)
+  <span class="kw">let</span> (_:state -&gt; (dir_ref*dir) -&gt; name -&gt; (dir_ref*dir) -&gt; name -&gt; ty_return2) = mvdir</code></pre>
+<div style='background-color:#FFFFCC'>
+<h3 id="mv"><a href="#mv"><code>mv</code></a></h3>
+<table>
+<tbody>
+<tr class="odd">
+<td align="left">Name</td>
+<td align="left"><code>mv</code></td>
+</tr>
+<tr class="even">
+<td align="left">Type</td>
+<td align="left">User function</td>
+</tr>
+<tr class="odd">
+<td align="left">Function</td>
+<td align="left">Move file <code>d0/name0</code> to <code>d1/name1</code></td>
+</tr>
+</tbody>
+</table>
+<p>Dependencies:</p>
+<ul>
+<li>the <code>rm</code> depends on the <code>internal_link_file</code>: the file must be linked in before the old ref is removed</li>
+</ul>
+<p>Pending ops:</p>
+<ul>
+<li><code>d1.dentries</code>: the newly linked in file</li>
+<li><code>d0.dentries</code>: the removal of the old file</li>
+</ul>
+<p>Atomicity:</p>
+<ul>
+<li><p>on non-journalled filesystems, this is likely two atomic ops: the link into <code>d1</code> and the removal from <code>d0</code>; this may (?) produce a file that is linked to multiple times</p></li>
+<li><p>on journalled filesystems, this is supposed to be atomic</p></li>
+</ul>
+</div>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="co">(* FIXME shouldn&#39;t this allow the name to be changed? similarly mvdir *)</span>
+  <span class="co">(* FIXME this should not allow the same file to be moved to itself - the following code deletes the file! also mvdir *)</span>
+  <span class="co">(* FIXME mv -T a.txt d fails if d is a dir, with mv: cannot overwrite directory d with non-directory... even if d is non-empty; but this happens in the user level mv, so may be allowed at syscall? *)</span>
+
+  <span class="kw">let</span> mv s0 (d0_ref,d0) name0 (d1_ref,d1) name1 = (
+    <span class="kw">let</span> <span class="dt">Some</span>(entry) = resolve1 s0 (d0_ref,d0) name0 <span class="kw">in</span>
+    <span class="kw">let</span> inode_ref = dest_inode_ref_entry entry <span class="kw">in</span>
+    <span class="kw">let</span> inode = get_inode s0 inode_ref <span class="kw">in</span>
+    <span class="kw">let</span> s0 = internal_link_file s0 (inode_ref,inode) (d1_ref,d1) name1 <span class="kw">in</span>
+    <span class="kw">let</span> s0 = internal_unlink s0 (d0_ref,d0) name0 <span class="kw">in</span> 
+    return s0)
+  <span class="kw">let</span> (_:state -&gt; (dir_ref*dir) -&gt; name -&gt; (dir_ref*dir) -&gt; name -&gt; ty_return2) = mv
+</code></pre>
+<div style='background-color:#FFFFCC'>
+<h3 id="write"><a href="#write"><code>write</code></a></h3>
+<table>
+<tbody>
+<tr class="odd">
+<td align="left">Name</td>
+<td align="left"><code>write</code></td>
+</tr>
+<tr class="even">
+<td align="left">Type</td>
+<td align="left">User function</td>
+</tr>
+<tr class="odd">
+<td align="left">Function</td>
+<td align="left">Write string <code>s</code> to file <code>i</code></td>
+</tr>
+</tbody>
+</table>
+<p>Dependencies:</p>
+<ul>
+<li>in the no-crash scenario, two non-overlapping writes to a file can be reordered, giving the same result; in the crash scenario, it is just about possible that applications depend on the order of writes being maintained (but presumably this is highly unlikely, since POSIX is presumably quiet on the matter)</li>
+</ul>
+<p>Pending ops:</p>
+<p>Atomicity:</p>
+</div>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="co">(* FIXME obviously we need to support writing at points in the file etc *)</span>
+  <span class="kw">let</span> write s0 (i0_ref,i0) c = (
+    <span class="kw">let</span> s0 = update_inds_some s0 (i0_ref,{i0 <span class="kw">with</span> fcontents=c}) <span class="kw">in</span>
+    return s0)
+  <span class="kw">let</span> (_:state -&gt; (inode_ref * inode) -&gt; bytes -&gt; ty_return2) = write</code></pre>
+<div style='background-color:#FFFFCC'>
+<h3 id="read"><a href="#read"><code>read</code></a></h3>
+<table>
+<tbody>
+<tr class="odd">
+<td align="left">Name</td>
+<td align="left"><code>read</code></td>
+</tr>
+<tr class="even">
+<td align="left">Type</td>
+<td align="left">User function</td>
+</tr>
+<tr class="odd">
+<td align="left">Function</td>
+<td align="left">Read a string from file</td>
+</tr>
+</tbody>
+</table>
+<p>Dependencies:</p>
+<p>Pending ops:</p>
+<p>Atomicity:</p>
+</div>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="co">(* FIXME obviously we need to support writing at points in the file etc *)</span>
+
+  <span class="co">(* FIXME read should not return an option - there is always some data by wellformedness *)</span>
+  <span class="co">(*</span>
+<span class="co">  let read s0 c_ref = (Contents_map.find2 c_ref s0.contents)</span>
+<span class="co">  let (_:state -&gt; file_contents_ref -&gt; bytes option) = read</span>
+
+<span class="co">  let read_all s0 (i0_ref,i) = (</span>
+<span class="co">    let c_ref = i.fcontents in</span>
+<span class="co">    let bs = read s0 c_ref in (* FIXME wellformedness? *)</span>
+<span class="co">    bs)</span>
+<span class="co">  let (_:state -&gt; (inode_ref * inode) -&gt; bytes option) = read_all  </span>
+<span class="co">  *)</span>
+
+  <span class="co">(* FIXME we assume that the bytes are in the map for valid i, don&#39;t need option *)</span>
+  <span class="kw">let</span> read s0 (i0_ref,i0) = (
+    <span class="kw">let</span> bytes = i0.fcontents <span class="kw">in</span>
+    {state2=s0; ret2=(<span class="dt">Bytes1</span> bytes)})
+  <span class="kw">let</span> (_:state -&gt; (inode_ref * inode) -&gt; ty_return2) = read</code></pre>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+end
+
+</code></pre>
+<h2 id="resolve-names"><a href="#resolve-names">Resolve names</a></h2>
+<p>We want to take a string such as <code>/x/y/z/d/</code> and process it:</p>
+<ul>
+<li>extract the components</li>
+<li>record whether the string starts in / (* but maybe vfs ensures all strings start in / *)</li>
+<li>record whether the string ends in /</li>
+<li>process the string (against the current state) to remove .. and . (providing entries exist; if not return ENOENT; function remove_dot_dotdot)</li>
+<li>then compare result with the current state to determine whether the string
+<ol style="list-style-type: decimal">
+<li>ends with a / and matches a dir</li>
+<li>ends with a / and matches a file (error)</li>
+<li>doesn't end with a slash and matches a file or dir</li>
+<li>ends with a slash or not, and doesn't match anything</li>
+</ol></li>
+</ul>
+<p>Proposed processing of last step: Ignoring trailing slash, do we match or not? Yes - check agreement with trailing slash (1) and (2) and (3). No - (4)</p>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+<span class="ot">module</span> Resolve = <span class="kw">struct</span>
+ 
+  <span class="ot">open</span> Prelude
+  <span class="ot">open</span> Fs_types
+  <span class="ot">open</span> Lift
+  <span class="ot">open</span> Fs_ops1
+
+  <span class="co">(* preliminary processing of ns; drop empty components and &quot;.&quot; components, and resolve &quot;..&quot; *)</span>
+  <span class="co">(* idempotent *)</span>
+  <span class="co">(* FIXME this is only OK if the e.g. d/../x/y/z we have that d exists FIXME do not use! *)</span>
+  <span class="kw">let</span> process_dot_dotdot ns = (
+    <span class="kw">let</span> ns = List<span class="kw">.</span>filter (<span class="kw">fun</span> n -&gt; not (n=<span class="st">&quot;&quot;</span> || n = <span class="st">&quot;.&quot;</span>)) ns <span class="kw">in</span>
+    <span class="kw">let</span> f1 sofar n = (<span class="kw">if</span> (n=<span class="st">&quot;..&quot;</span> &amp;&amp; sofar &lt;&gt; []) <span class="kw">then</span> (List<span class="kw">.</span>tl sofar) <span class="kw">else</span> (sofar@[n])) <span class="kw">in</span>
+    <span class="kw">let</span> ns = List<span class="kw">.</span>fold_left f1 [] ns <span class="kw">in</span>
+    ns)
+  <span class="kw">let</span> (_:name <span class="dt">list</span> -&gt; name <span class="dt">list</span>) = process_dot_dotdot  
+
+  <span class="co">(* resolve ns, return a (dir_ref,dir) *)</span>
+  <span class="kw">let</span> resolve_dir_ref s0 ns = (
+    <span class="kw">let</span> ns = process_dot_dotdot ns <span class="kw">in</span>
+    <span class="co">(* sofar is the (dir_ref,dir) we currently got to; starts off as the root *)</span>
+    <span class="kw">let</span> <span class="kw">rec</span> f1 sofar ns = (<span class="kw">match</span> ns <span class="kw">with</span> 
+      | [] -&gt; (<span class="dt">Some</span> sofar)
+      | n::ns -&gt; (
+        <span class="co">(* FIXME following should return None if lookup fails; FIXME option monad would make this more readable *)</span>
+        <span class="kw">let</span> m = (snd sofar).dentries <span class="kw">in</span>
+        <span class="kw">match</span> (Entries<span class="kw">.</span>find2 n m) <span class="kw">with</span> | <span class="dt">None</span> -&gt; <span class="dt">None</span> | <span class="dt">Some</span> entry -&gt; 
+        <span class="kw">match</span> is_dir_ref_entry entry <span class="kw">with</span> | <span class="kw">false</span> -&gt; <span class="dt">None</span> | <span class="kw">true</span> -&gt;
+        <span class="kw">let</span> dir_ref = dest_dir_ref_entry entry <span class="kw">in</span> 
+        <span class="kw">let</span> <span class="dt">Some</span>(dir) = lookup_dir s0 dir_ref <span class="kw">in</span> <span class="co">(* wellformedness, shouldn&#39;t fail *)</span>
+        f1 (dir_ref,dir) ns))
+    <span class="kw">in</span>
+    f1 root ns)
+  <span class="kw">let</span> (_:state -&gt; name <span class="dt">list</span> -&gt; (dir_ref * dir) <span class="dt">option</span>) = resolve_dir_ref
+
+  <span class="kw">let</span> dir_exists s0 ns = (resolve_dir_ref s0 ns &lt;&gt; <span class="dt">None</span>)
+
+  <span class="co">(* ns cannot be empty *)</span>
+  <span class="kw">let</span> resolve_inode_ref s0 ns = (
+    <span class="kw">let</span> ns = process_dot_dotdot ns <span class="kw">in</span>
+    <span class="kw">let</span> r = resolve_dir_ref s0 (butlast ns) <span class="kw">in</span>
+    <span class="kw">if</span> r=None <span class="kw">then</span> <span class="dt">None</span> <span class="kw">else</span>
+    <span class="kw">let</span> (dir_ref,dir) = dest_Some r <span class="kw">in</span>
+    <span class="kw">let</span> n = last ns <span class="kw">in</span>
+    <span class="kw">let</span> m = dir.dentries <span class="kw">in</span>
+    <span class="kw">match</span> (Entries<span class="kw">.</span>find2 n m) <span class="kw">with</span> | <span class="dt">None</span> -&gt; <span class="dt">None</span> | <span class="dt">Some</span> entry -&gt; 
+    <span class="kw">match</span> is_inode_ref_entry entry <span class="kw">with</span> | <span class="kw">false</span> -&gt; <span class="dt">None</span> | <span class="kw">true</span> -&gt; 
+    <span class="kw">let</span> inode_ref = dest_inode_ref_entry entry <span class="kw">in</span> <span class="co">(* assume a file *)</span>
+    <span class="kw">let</span> <span class="dt">Some</span>(inode) = lookup_inode s0 inode_ref <span class="kw">in</span> <span class="co">(* wellformedness, can&#39;t fail *)</span>
+    <span class="dt">Some</span>(inode_ref,inode))
+  <span class="kw">let</span> (_:state -&gt; name <span class="dt">list</span> -&gt; (inode_ref * inode) <span class="dt">option</span>) = resolve_inode_ref    
+
+  <span class="kw">let</span> file_exists s0 ns = (resolve_inode_ref s0 ns &lt;&gt; <span class="dt">None</span>)
+
+  <span class="co">(* assumes path starts with &#39;/&#39;; throws an exception if not; FIXME do we always know the path starts with &#39;/&#39;? *)</span>
+
+  <span class="co">(* take a string, get components and whether ends in slash *)</span>
+  <span class="kw">let</span> process_path1 path = (
+    <span class="kw">let</span> p = explode path <span class="kw">in</span>
+    <span class="kw">if</span> p = [] <span class="kw">then</span> failwith <span class="st">&quot;process_path1: empty path&quot;</span> <span class="kw">else</span>
+    <span class="kw">if</span> List<span class="kw">.</span>hd p &lt;&gt; <span class="st">&quot;/&quot;</span> <span class="kw">then</span> failwith <span class="st">&quot;process_path: doesn&#39;t start with /&quot;</span> <span class="kw">else</span>
+    <span class="kw">let</span> p = List<span class="kw">.</span>tl p <span class="kw">in</span>
+    <span class="kw">let</span> f1 (ns,cur) c = (<span class="kw">if</span> c=<span class="st">&quot;/&quot;</span> <span class="kw">then</span> (ns@[cur],<span class="st">&quot;&quot;</span>) <span class="kw">else</span> (ns,cur^c)) <span class="kw">in</span>
+    <span class="kw">let</span> (ns,cur) = List<span class="kw">.</span>fold_left f1 ([],<span class="st">&quot;&quot;</span>) p <span class="kw">in</span>
+    <span class="kw">let</span> ends_with_slash = (cur=<span class="st">&quot;&quot;</span>) <span class="kw">in</span>
+    <span class="kw">let</span> ns = (<span class="kw">if</span> ends_with_slash <span class="kw">then</span> ns <span class="kw">else</span> ns@[cur]) <span class="kw">in</span>
+    { ns2=ns; ends_with_slash2=ends_with_slash })
+  <span class="kw">let</span> (_:string -&gt; ty_name_list2) = process_path1
+
+  <span class="co">(* take a state and a ty_name_list2, and check if name exists in state *)</span>
+  <span class="kw">let</span> process_path2 s0 ns = (
+    <span class="kw">match</span> ns.ends_with_slash2 <span class="kw">with</span> 
+    | <span class="kw">true</span> -&gt; (
+      <span class="kw">let</span> opt = resolve_dir_ref s0 ns.ns2 <span class="kw">in</span>
+      <span class="kw">match</span> opt <span class="kw">with</span> 
+      | <span class="dt">Some</span>(dir_ref,dir) -&gt; <span class="dt">Dname2</span>((dir_ref,dir),ns)
+      | <span class="dt">None</span> -&gt; (
+        <span class="kw">let</span> opt = resolve_inode_ref s0 ns.ns2 <span class="kw">in</span> 
+        <span class="kw">match</span> opt <span class="kw">with</span>
+        | <span class="dt">None</span> -&gt; <span class="dt">None2</span> ns
+          <span class="co">(* following case, ns ends with a slash, but resolves to a file *)</span>
+        | <span class="dt">Some</span>(iref,i) -&gt; <span class="dt">Err2</span>((iref,i),ns))) 
+    | <span class="kw">false</span> -&gt; (
+      <span class="kw">let</span> opt = resolve_dir_ref s0 ns.ns2 <span class="kw">in</span>
+      <span class="kw">match</span> opt <span class="kw">with</span>
+      | <span class="dt">Some</span>(dir_ref,dir) -&gt; <span class="dt">Dname2</span>((dir_ref,dir),ns)
+      | <span class="dt">None</span> -&gt; (
+        <span class="kw">let</span> opt = resolve_inode_ref s0 ns.ns2 <span class="kw">in</span>
+        <span class="kw">match</span> opt <span class="kw">with</span> 
+        | <span class="dt">Some</span>(iref,i) -&gt; <span class="dt">Fname2</span>((iref,i),ns)
+        | <span class="dt">None</span> -&gt; <span class="dt">None2</span> ns)))
+  <span class="kw">let</span> (_:state -&gt; ty_name_list2 -&gt; rname2) = process_path2
+
+  <span class="co">(* guarantees: returns option of Fname or Dname  *)</span>
+  <span class="co">(* FIXME here or in ops parser, may want to drop empty components, resolve . and .. components etc *)</span>
+  <span class="kw">let</span> process_path s0 path = (
+    <span class="kw">let</span> rpath1 = process_path1 path <span class="kw">in</span>
+    <span class="kw">let</span> rpath2 = process_path2 s0 rpath1 <span class="kw">in</span>
+    rpath2)  
+  <span class="kw">let</span> (_:state -&gt; <span class="dt">string</span> -&gt; rname2) = process_path
+
+<span class="kw">end</span></code></pre>
+<h2 id="fs_ops2"><a href="#fs_ops2"><code>Fs_ops2</code></a></h2>
+<p>Fs ops is very precise about what each argument is expected to be. Dirnames start and end in <code>/</code>. Filenames must not end in <code>/</code>. We don't check that the target of a <code>mv</code> is empty, or doesn't exist etc. However, at the command line, there is some ambiguity:</p>
+<ul>
+<li><p>assuming <code>tmp.txt</code> is a file, then <code>mv tmp.txt d</code> will treat <code>d</code> as a file (if no d exists), or as a dir (if d exists and is a dir)</p></li>
+<li><p><code>mv tmp.txt d/</code> will treat <code>d/</code> as a dir always</p></li>
+</ul>
+<p>So some possible sources of ambiguity are:</p>
+<ul>
+<li><p>is <code>tmp.txt</code> a file or a directory? (if it exists, then it is whatever it is)</p></li>
+<li><p>if we mean a dir, we can add a '/', and this makes clear what we mean; if we don't add a '/' then the fs may not know whether we intend a file or directory</p></li>
+<li><p>even if we are clear that we mean a dir, there can be multiple interpretations: <code>mv c/ e/</code> renames c to e, providing e doesn't already exist; if e does exist, then c goes into e</p></li>
+<li><p><code>mv c/ e/</code> will overwrite a directory <code>e/c</code> if <code>e/c</code> is empty; will fail if <code>e/c</code> is not empty</p></li>
+</ul>
+<p>At the user level, there is some extra logic which makes commands behave differently eg if the target is absent, or a file, or a directory eg for the command <code>mv src dst</code></p>
+<ul>
+<li><p>if src is a file, and dst is a dir, then src is moved into dir</p></li>
+<li><p>if src if a file and dst is a file, then src is moved over dst (dst is unlinked)</p></li>
+<li><p>if src is a dir and dst is a dir, then</p></li>
+</ul>
+<p>Some criteria:</p>
+<ul>
+<li><p>src,dst ends in '/'</p></li>
+<li><p>src,dst exists/not exists (but how to connect name to entity? the point is that this connection is heuristic in some sense; proposal: given a fordname, check whether a dir exists with that name; if not, attempt to interpret as file)</p></li>
+<li><p>src,dst exists and is a file/ is a dir</p></li>
+</ul>
+<p>Proposed <code>mv</code> processing stages:</p>
+<ol style="list-style-type: decimal">
+<li><p>if either src or dst is fordname (no trailing /) then try to disambiguate: if directory src exists, then src is a dirname, otherwise filename; from this point onwards, we use &quot;src&quot; to indicate a filename, and &quot;src/&quot; to indicate a dirname</p>
+<p><code>mv src dst/</code>: move file src to dst directory; if src doesn't exist, fail; if dst directory doesn't exist, fail</p>
+<p><code>mv src/ dst</code>: move directory src to directory dst; dst directory doesn't exist by disambiguation (otherwise the command would have been interpreted as <code>mv src/ dst/</code>); fail if src doesn't exist</p>
+<p><code>mv src dst</code>: move file src to file dst; if src doesn't exist, fail</p>
+<p><code>mv src/ dst/</code>: if <code>dst</code> exists, then attempt to move dir src to a subdirectory of dst; if <code>dst/src</code> file exists, overwrite; if <code>dst/src</code> dir exists, and is empty, then do the move, otherwise fail</p></li>
+</ol>
+<p>Note: these options don't even include checking whether src and dst are soft links (which further complicates matters; FIXME we don't deal with soft links at this stage)</p>
+<p>For the moment, we content ourselves with the following horrible code...</p>
+<p>For <code>Fs_ops2</code> we provide functions from state to Inl of state * err, or Inr of state * ret</p>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+<span class="co">(* FIXME these work in terms of rnames; assumes no Err2 *)</span>
+<span class="ot">module</span> Fs_ops2 = <span class="kw">struct</span>
+  
+  <span class="ot">open</span> Unix <span class="co">(* for st_dev record fields etc *)</span>
+  <span class="ot">open</span> LargeFile <span class="co">(* FIXME include stats in Fs_types? *)</span>
+
+  <span class="ot">open</span> Prelude
+  <span class="ot">open</span> Fs_types
+  <span class="ot">open</span> Fs_ops1
+  <span class="ot">open</span> Resolve
+
+  <span class="kw">type</span> error = Fs_types<span class="kw">.</span>error
+  <span class="kw">type</span> &#39;a ty_return3 = (state * error, state * &#39;a) sum
+  <span class="co">(* vars u, v used eg for Mymonad u *)</span>
+  <span class="kw">type</span> &#39;a mymonad = <span class="dt">Mymonad</span> <span class="kw">of</span> (state -&gt; &#39;a ty_return3)
+  <span class="kw">let</span> dest_mymonad (<span class="dt">Mymonad</span> u) = u
+  <span class="kw">let</span> return x = <span class="dt">Mymonad</span> (<span class="kw">fun</span> s -&gt; <span class="dt">Inr</span>(s,x))
+  <span class="kw">let</span> (_:&#39;a -&gt; &#39;a mymonad) = return
+
+  <span class="kw">let</span> bind u f = <span class="dt">Mymonad</span> (<span class="kw">fun</span> s -&gt;
+    <span class="kw">let</span> u = dest_mymonad u <span class="kw">in</span>
+    <span class="kw">let</span> r = u s <span class="kw">in</span>
+    <span class="kw">match</span> r <span class="kw">with</span>
+    | <span class="dt">Inl</span> x -&gt; (<span class="dt">Inl</span> x)
+    | <span class="dt">Inr</span> (s,x) -&gt; (
+      <span class="kw">let</span> v = dest_mymonad (f x) <span class="kw">in</span>
+      v s))
+  <span class="kw">let</span> (_: &#39;a mymonad -&gt; (&#39;a -&gt; &#39;b mymonad) -&gt; &#39;b mymonad) = bind
+
+  <span class="kw">let</span> ( &gt;&gt;= ) = bind
+  
+  <span class="kw">let</span> get_state = <span class="dt">Mymonad</span> (<span class="kw">fun</span> s -&gt; <span class="dt">Inr</span>(s,s))
+  <span class="kw">let</span> put_state s0 = <span class="dt">Mymonad</span> (<span class="kw">fun</span> s -&gt; <span class="dt">Inr</span>(s,<span class="dt">None1</span>))
+  <span class="kw">let</span> myraise e = <span class="dt">Mymonad</span> (<span class="kw">fun</span> s -&gt; <span class="dt">Inl</span>(s,e))
+
+  <span class="kw">let</span> run_mymonad (<span class="dt">Mymonad</span> f) s = (f s)
+
+  <span class="co">(*</span>
+<span class="co">  let file_exists (s0:state) ns = Resolve.file_exists s0 ns</span>
+
+<span class="co">  let dir_exists (s0:state) ns = Resolve.file_exists s0 ns</span>
+<span class="co">  *)</span>
+
+  <span class="kw">let</span> is_empty_dir (s0:state) ns = failwith <span class="st">&quot;FIXME&quot;</span>
+
+  <span class="kw">let</span> default_stats = {
+    st_dev = 2049; <span class="co">(* device number FIXME 0? *)</span>
+    st_ino = 999; <span class="co">(* inode number FIXME change this for particular file etc *)</span>
+    st_kind = Unix<span class="kw">.</span><span class="dt">S_DIR;</span> <span class="co">(* FIXME *)</span>
+    st_perm = 0o777; <span class="co">(* ugo+rwx *)</span>
+    st_nlink = 2; <span class="co">(* FIXME dummy - for dir should be number of entries + 2 *)</span>
+    st_uid = 1000; <span class="co">(* FIXME 0? *)</span>
+    st_gid = 1000; 
+    st_rdev = 0; <span class="co">(* device minor number *)</span>
+    st_size = 4096L; <span class="co">(* FIXME dummy *)</span>
+    st_atime = 0.;
+    st_mtime = 0.;
+    st_ctime = 0.
+  }
+
+  <span class="kw">let</span> default_file_stats s0 (i0_ref,i0) = { default_stats <span class="kw">with</span>
+    st_ino=(dest_inode_ref i0_ref);
+    st_kind=Unix.<span class="dt">S_REG;</span>
+    st_size=(
+      <span class="kw">let</span> bs = dest_bytes1 ((Fs_ops1<span class="kw">.</span>read s0 (i0_ref,i0)).ret2) <span class="kw">in</span>
+      (Int64<span class="kw">.</span>of_int (MyDynArray<span class="kw">.</span>dim bs)))
+  }
+ 
+  <span class="kw">let</span> default_dir_stats (d0_ref,d0) = { default_stats <span class="kw">with</span>
+    st_ino=(dest_dir_ref d0_ref);
+    st_kind=Unix.<span class="dt">S_DIR;</span>
+    st_size=4096L; <span class="co">(* seems to be default on my system - but changes depending on number of entries? *)</span>
+  }
+
+  <span class="co">(* FIXME surely a lot of this complexity is because this is the user land behaviour of the mv command - but we want to target the syscall interface *)</span>
+  <span class="co">(* FIXME we probably want the containing dirs as well, when doing rename; put this in resolve *)</span>
+  <span class="kw">let</span> rename rsrc rdst = (
+    get_state &gt;&gt;= (<span class="kw">fun</span> s0 -&gt; 
+    <span class="kw">match</span> rsrc <span class="kw">with</span>
+    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* no src file *)</span>
+    | <span class="dt">Fname2</span> ((i0_ref,i0),ns_src) -&gt; (
+      <span class="co">(* file exists *)</span>
+      <span class="kw">match</span> rdst <span class="kw">with</span> 
+      | <span class="dt">None2</span> ns_dst -&gt; (
+        <span class="co">(* do the move; there is no file ns_dst *)</span>
+        <span class="co">(* FIXME check rename to target where parent doesn&#39;t exist *)</span>
+        <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) <span class="kw">in</span>
+        <span class="kw">match</span> resolve_dir_ref s0 (butlast ns_dst.ns2) <span class="kw">with</span>
+        | <span class="dt">None</span> -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* parent dir of dst doesn&#39;t exist *)</span>
+        | <span class="dt">Some</span>(d1_ref,d1) -&gt; (
+          put_state (Fs_ops1<span class="kw">.</span>mv s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2))))
+      | <span class="dt">Fname2</span> (_,ns_dst) -&gt; (
+        <span class="co">(* do the move; there is a file name ns_dst *)</span>
+        <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) <span class="kw">in</span>
+        <span class="kw">let</span> <span class="dt">Some</span>(d1_ref,d1) = resolve_dir_ref s0 (butlast ns_dst.ns2) <span class="kw">in</span>
+        put_state (Fs_ops1<span class="kw">.</span>mv s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2)))
+        <span class="co">(* FIXME may want to have putstate return a void value *)</span>
+      | <span class="dt">Dname2</span> ((d0_ref,d0),ns_dst) -&gt; (myraise <span class="dt">EISDIR</span>)) <span class="co">(* FIXME test this *)</span>
+    | <span class="dt">Dname2</span> (_,ns_src) -&gt; (
+      <span class="co">(* directory exists *)</span>
+      <span class="kw">match</span> rdst <span class="kw">with</span>
+      | <span class="dt">None2</span> ns_dst -&gt; (
+        <span class="co">(* do the move; there is no file ns_dst *)</span>
+        <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) <span class="kw">in</span>
+        <span class="kw">match</span> resolve_dir_ref s0 (butlast ns_dst.ns2) <span class="kw">with</span>
+        | <span class="dt">None</span> -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* parent dir of dst doesn&#39;t exist *)</span>
+        | <span class="dt">Some</span>(d1_ref,d1) -&gt; (
+          put_state (Fs_ops1<span class="kw">.</span>mvdir s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2))))
+      | <span class="dt">Fname2</span> (_,ns_dst) -&gt; (myraise <span class="dt">ENOTDIR</span>)
+      | <span class="dt">Dname2</span> (_,ns_dst) -&gt; (
+        <span class="co">(* FIXME check if dir not empty *)</span>
+        <span class="kw">if</span> (<span class="kw">false</span>) <span class="kw">then</span> (myraise <span class="dt">ENOTEMPTY</span>) <span class="kw">else</span>
+        <span class="co">(* FIXME check if renaming to a subdir *)</span>
+        <span class="kw">if</span> (<span class="kw">false</span>) <span class="kw">then</span> (myraise <span class="dt">EINVAL</span>) <span class="kw">else</span>
+        <span class="co">(* otherwise target dir is empty; do rename *)</span>
+        <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) <span class="kw">in</span>
+        <span class="kw">let</span> <span class="dt">Some</span>(d1_ref,d1) = resolve_dir_ref s0 (butlast ns_dst.ns2) <span class="kw">in</span>
+        put_state (Fs_ops1<span class="kw">.</span>mvdir s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2))))))
+  <span class="kw">let</span> (_:rname2 -&gt; rname2 -&gt; ret_value mymonad) = rename      
+
+  <span class="co">(* NB doesn&#39;t include . and .. *)</span>
+  <span class="kw">let</span> readdir rname2 = (
+    get_state &gt;&gt;= (<span class="kw">fun</span> s0 -&gt; (
+    <span class="kw">match</span> rname2 <span class="kw">with</span> 
+    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* (raise (Unix_error (ENOENT,&quot;readdir&quot;,&quot;/FIXMEreaddir&quot;))) (* FIXME we may need access to the underlying path that was given by the user *) *)</span>
+    | <span class="dt">Fname2</span> _ -&gt; (myraise <span class="dt">ENOTDIR</span>) <span class="co">(* (raise (Unix_error (ENOTDIR,&quot;readdir&quot;,&quot;/FIXMEreaddir&quot;))) *)</span>
+    | <span class="dt">Dname2</span>((d0_ref,d0),ns) -&gt; (
+      <span class="kw">let</span> es0 = d0.dentries <span class="kw">in</span>
+      <span class="kw">let</span> binds = Entries<span class="kw">.</span>bindings es0 <span class="kw">in</span>
+      return (<span class="dt">Names1</span> (List<span class="kw">.</span>map fst binds))))))
+  <span class="kw">let</span> (_:rname2 -&gt; ret_value mymonad) = readdir
+  <span class="co">(* NB later we may want to also return a state, given access times can cause changes when reading etc *)</span>
+
+  <span class="kw">let</span> stat rname2 = (
+    get_state &gt;&gt;= (<span class="kw">fun</span> s0 -&gt; (
+    <span class="kw">let</span> _ = (print_endline (<span class="st">&quot;stat: &quot;</span>^(string_of_rname2 rname2))) <span class="kw">in</span>
+    <span class="kw">match</span> rname2 <span class="kw">with</span>
+    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>)  <span class="co">(* (raise (Unix_error (ENOENT,&quot;stat&quot;,&quot;/FIXMEstat&quot;))) *)</span>
+    | <span class="dt">Fname2</span>((i0_ref,i0),ns) -&gt; (return (<span class="dt">Stats1</span> (default_file_stats s0 (i0_ref,i0))))
+    | <span class="dt">Dname2</span>((d0_ref,d0),ns) -&gt; (return (<span class="dt">Stats1</span> (default_dir_stats (d0_ref,d0)))))))
+  <span class="kw">let</span> (_:rname2 -&gt; ret_value mymonad) = stat
+
+  <span class="co">(* FIXME the real spec would allow reading less than all the bytes *)</span>
+  <span class="kw">let</span> read rname2 ofs len = (
+    get_state &gt;&gt;= (<span class="kw">fun</span> s0 -&gt; (
+    <span class="kw">match</span> rname2 <span class="kw">with</span> 
+    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* (raise (Unix_error (ENOENT,&quot;read&quot;,&quot;/FIXMEread&quot;))) *)</span>
+    | <span class="dt">Dname2</span>(_,_) -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* (raise (Unix_error (ENOENT,&quot;read&quot;,&quot;/FIXMEread&quot;))) *)</span>
+    | <span class="dt">Fname2</span>((i0_ref,i0),ns) -&gt; (
+      <span class="kw">let</span> r = Fs_ops1<span class="kw">.</span>read s0 (i0_ref,i0) <span class="kw">in</span> <span class="co">(* FIXME Fs_ops1 may have to take an offset too *)</span>
+      (put_state r.state2) &gt;&gt;= (<span class="kw">fun</span> _ -&gt; (
+      <span class="kw">let</span> bs = dest_bytes1 r.ret2 <span class="kw">in</span>
+      <span class="kw">let</span> bs&#39; = MyDynArray<span class="kw">.</span>sub bs ofs len <span class="kw">in</span>
+      return (<span class="dt">Bytes1</span>(bs&#39;))))))))
+  <span class="kw">let</span> (_:rname2 -&gt; <span class="dt">int</span> -&gt; <span class="dt">int</span> -&gt; ret_value mymonad) = read
+
+  <span class="co">(* FIXME we need to make this take an offset in order to be usable, also read *)</span>
+  <span class="co">(* FIXME the real spec would allow writing less than all the bytes *)</span>
+  <span class="kw">let</span> write rname2 ofs bs len = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt; 
+    <span class="kw">match</span> rname2 <span class="kw">with</span> 
+    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* (raise (Unix_error (ENOENT,&quot;read&quot;,&quot;/FIXMEwrite&quot;))) *)</span>
+    | <span class="dt">Dname2</span>(_,_) -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* (raise (Unix_error (ENOENT,&quot;read&quot;,&quot;/FIXMEwrite&quot;))) *)</span>
+    | <span class="dt">Fname2</span>((i0_ref,i0),ns) -&gt; (
+      <span class="kw">let</span> r = Fs_ops1<span class="kw">.</span>read s0 (i0_ref,i0) <span class="kw">in</span>
+      put_state r.state2 &gt;&gt;= <span class="kw">fun</span> _ -&gt; 
+      <span class="kw">let</span> bs&#39; = dest_bytes1 r.ret2 <span class="kw">in</span>
+      <span class="co">(* want to create a new array from bs&#39; and bs *)</span>
+      <span class="kw">let</span> bs&#39;&#39; = MyDynArray<span class="kw">.</span>write bs&#39; ofs bs 0 len <span class="kw">in</span>
+      return (<span class="dt">Bytes1</span>(bs&#39;&#39;))))
+  <span class="kw">let</span> (_:rname2 -&gt; <span class="dt">int</span> -&gt; file_contents -&gt; <span class="dt">int</span> -&gt; ret_value mymonad) = write
+
+  <span class="kw">let</span> truncate rpath len = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
+    <span class="kw">match</span> rpath <span class="kw">with</span> 
+    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>)
+    | <span class="dt">Dname2</span>(_,_) -&gt; (myraise <span class="dt">EISDIR</span>) <span class="co">(* FIXME check error messages are sensible *)</span>
+    | <span class="dt">Fname2</span>((i0_ref,i0),ns) -&gt; (
+      <span class="kw">let</span> r = Fs_ops1<span class="kw">.</span>read s0 (i0_ref,i0) <span class="kw">in</span>
+      <span class="kw">let</span> bs = dest_bytes1 r.ret2 <span class="kw">in</span>
+      <span class="co">(* create a new array, of length len, with same contents *)</span>
+      <span class="kw">let</span> bs&#39; = MyDynArray<span class="kw">.</span>resize bs len <span class="kw">in</span>
+      <span class="kw">let</span> s0 = Fs_ops1<span class="kw">.</span>write s0 (i0_ref,i0) bs&#39; <span class="kw">in</span>
+      put_state s0))
+  <span class="kw">let</span> (_:rname2 -&gt; <span class="dt">int</span> -&gt; ret_value mymonad) = truncate
+
+  <span class="kw">let</span> open_create rpath = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
+    <span class="kw">match</span> rpath <span class="kw">with</span> 
+    | <span class="dt">Dname2</span>(_,_) -&gt; (myraise <span class="dt">EEXIST</span>) 
+    | <span class="dt">Fname2</span>(_,_) -&gt; (myraise <span class="dt">EEXIST</span>)
+    | <span class="dt">None2</span> ns -&gt; (
+      <span class="co">(* FIXME for us, open_create should only create files *)</span>
+      <span class="kw">if</span> ns.ends_with_slash2 <span class="kw">then</span> (myraise <span class="dt">EISDIR</span>) <span class="kw">else</span> 
+      <span class="co">(* maybe we are trying to create a file &quot;&quot; ie path was empty *)</span>
+      <span class="kw">if</span> ns.ns2 = [] <span class="kw">then</span> (myraise <span class="dt">ENOENT</span>) <span class="kw">else</span>
+      <span class="co">(* FIXME need to look at mode *)</span>
+      <span class="kw">let</span> dname = butlast ns.ns2 <span class="kw">in</span>
+      <span class="kw">let</span> fname = last ns.ns2 <span class="kw">in</span>
+      <span class="kw">let</span> dpath = process_path2 s0 { ns2=dname; ends_with_slash2=false } <span class="kw">in</span>
+      <span class="kw">match</span> dpath <span class="kw">with</span>
+      | <span class="dt">Dname2</span>((d0_ref,d0),ns) -&gt; (
+        <span class="co">(* FIXME assume dir exists; otherwise FIXME we should throw ENOENT *)</span>
+        <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 dname <span class="kw">in</span>
+        <span class="kw">let</span> s0 = Fs_ops1<span class="kw">.</span>touch s0 (d0_ref,d0) fname <span class="kw">in</span>
+        put_state s0)
+      | <span class="dt">Fname2</span>(_,_) -&gt; (myraise <span class="dt">ENOTDIR</span>)
+      | _ -&gt; (myraise <span class="dt">ENOENT</span>)))
+  <span class="kw">let</span> (_:rname2 -&gt; ret_value mymonad) = open_create
+
+  <span class="kw">let</span> unlink rpath = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
+    <span class="kw">match</span> rpath <span class="kw">with</span> 
+    | <span class="dt">None2</span>(_) -&gt; (myraise <span class="dt">ENOENT</span>)
+    | <span class="dt">Dname2</span>(_,_) -&gt; (myraise <span class="dt">EISDIR</span>)
+    | <span class="dt">Fname2</span>((i0_ref,i0),ns) -&gt; (
+      <span class="co">(* FIXME for resolving a file, often useful to have dir ref as well *)</span>
+      <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns.ns2) <span class="kw">in</span>
+      <span class="kw">let</span> s0 = Fs_ops1<span class="kw">.</span>unlink s0 (d0_ref,d0) (last ns.ns2) <span class="kw">in</span>
+      put_state s0))
+
+  <span class="kw">let</span> mkdir rpath perms = (
+    <span class="co">(* FIXME deal with perms *)</span>
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
+    <span class="kw">match</span> rpath <span class="kw">with</span> 
+    | <span class="dt">None2</span>(ns) -&gt; (
+      <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns.ns2) <span class="kw">in</span>
+      <span class="kw">let</span> s0 = Fs_ops1<span class="kw">.</span>mkdir s0 (d0_ref,d0) (last ns.ns2) <span class="kw">in</span>
+      put_state s0)
+    | <span class="dt">Dname2</span>(_,_) -&gt; (myraise <span class="dt">EEXIST</span>)
+    | <span class="dt">Fname2</span>(_,_) -&gt; (myraise <span class="dt">EEXIST</span>))
+
+  <span class="kw">let</span> link spath dpath = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
+    <span class="kw">match</span> spath <span class="kw">with</span> 
+    | <span class="dt">Fname2</span>((i0_ref,i0),ns_src)  -&gt; (
+      <span class="kw">match</span> dpath <span class="kw">with</span> 
+      | <span class="dt">None2</span> ns_dst -&gt; (
+        <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_dst.ns2) <span class="kw">in</span>
+        <span class="kw">let</span> s0 = link_file s0 (i0_ref,i0) (d0_ref,d0) (last ns_dst.ns2) <span class="kw">in</span>
+        put_state s0)
+      | _ -&gt; (myraise <span class="dt">EEXIST</span>))
+    | _ -&gt; (myraise <span class="dt">ENOENT</span>))
+
+  <span class="kw">let</span> rmdir rpath = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
+    <span class="kw">match</span> rpath <span class="kw">with</span> 
+    | <span class="dt">Dname2</span>(_,ns) -&gt; (
+      <span class="co">(* FIXME for resolving a file, often useful to have dir ref as well *)</span>
+      <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns.ns2) <span class="kw">in</span>
+      <span class="kw">let</span> s0 = Fs_ops1<span class="kw">.</span>unlink s0 (d0_ref,d0) (last ns.ns2) <span class="kw">in</span>
+      put_state s0)
+    | <span class="dt">Fname2</span> _ -&gt; (myraise <span class="dt">ENOTDIR</span>)
+    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>))
+
+
+<span class="kw">end</span></code></pre>
+<h2 id="fs_ops3"><a href="#fs_ops3"><code>Fs_ops3</code></a></h2>
+<p>This works in terms of strings; handles Err2 on resolving</p>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+<span class="ot">module</span> Fs_ops3 = <span class="kw">struct</span> 
+
+  <span class="ot">open</span> Fs_types
+  <span class="ot">open</span> Resolve
+  <span class="ot">open</span> Fs_ops2
+
+
+  <span class="kw">let</span> link src dst = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt; 
+    <span class="kw">let</span> rsrc = process_path s0 src <span class="kw">in</span>
+    <span class="kw">let</span> rdst = process_path s0 dst <span class="kw">in</span>
+    <span class="kw">if</span> (is_Err2 rsrc || is_Err2 rdst) <span class="kw">then</span> (myraise <span class="dt">ENOTDIR</span>) <span class="kw">else</span> Fs_ops2<span class="kw">.</span>link rsrc rdst)
+
+  <span class="kw">let</span> mkdir path perms = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
+    <span class="kw">let</span> rpath = process_path s0 path <span class="kw">in</span>
+    <span class="kw">if</span> (is_Err2 rpath) <span class="kw">then</span> (myraise <span class="dt">ENOTDIR</span>) <span class="kw">else</span> Fs_ops2<span class="kw">.</span>mkdir rpath perms)
+
+  <span class="co">(* FIXME we have to take care of flags eg O_TRUNC *)</span>
+  <span class="co">(* FIXME return is int option - meaning optional file handle? *)</span>
+  <span class="co">(* FIXME why is this called fopen (taking an fd?) rather than open? *)</span>
+  <span class="co">(* FIXME the mapping between fds and files is handled elsewhere - needs a new part of spec *)</span>
+  <span class="kw">let</span> _open path flags = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
+    <span class="kw">let</span> rpath = process_path s0 path <span class="kw">in</span>
+    <span class="kw">match</span> rpath <span class="kw">with</span>
+    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>)
+    | <span class="dt">Dname2</span>(_,_) -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* FIXME? can we open a dir? *)</span>
+    | _ -&gt; (return <span class="dt">None1</span>))
+  <span class="kw">let</span> (_:string -&gt; &#39;a -&gt; ret_value mymonad) = _open
+ 
+  <span class="co">(* open call returns an fd; but may have side effects; open create is one such call; FIXME what are others? *)</span>
+  <span class="kw">let</span> open_create path = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
+    <span class="kw">let</span> rpath = process_path s0 path <span class="kw">in</span>
+    <span class="kw">if</span> (is_Err2 rpath) <span class="kw">then</span> (myraise <span class="dt">ENOTDIR</span>) <span class="kw">else</span> Fs_ops2<span class="kw">.</span>open_create rpath)
+
+  <span class="co">(* N.B. for read and write ofs is associated with fd, so presumably &lt; len of file *)</span>
+  <span class="kw">let</span> read path ofs len = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
+    <span class="kw">let</span> rpath = process_path s0 path <span class="kw">in</span>
+    <span class="kw">if</span> (is_Err2 rpath) <span class="kw">then</span> (myraise <span class="dt">ENOTDIR</span>) <span class="kw">else</span> Fs_ops2<span class="kw">.</span>read rpath ofs len)
+  
+  <span class="kw">let</span> readdir path = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
+    <span class="kw">let</span> rpath = process_path s0 path <span class="kw">in</span>
+    <span class="kw">if</span> (is_Err2 rpath) <span class="kw">then</span> (myraise <span class="dt">ENOTDIR</span>) <span class="kw">else</span> Fs_ops2<span class="kw">.</span>readdir rpath)
+
+  <span class="co">(* FIXME check do_rename against ops2.rename; also check against doc in linux sys programming *)</span>
+  <span class="kw">let</span> rename src dst = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt; 
+    <span class="kw">let</span> rsrc = process_path s0 src <span class="kw">in</span>
+    <span class="kw">let</span> rdst = process_path s0 dst <span class="kw">in</span>
+    <span class="kw">if</span> (is_Err2 rsrc || is_Err2 rdst) <span class="kw">then</span> (myraise <span class="dt">ENOTDIR</span>) <span class="kw">else</span> Fs_ops2<span class="kw">.</span>rename rsrc rdst)
+  <span class="kw">let</span> (_:string -&gt; <span class="dt">string</span> -&gt; ret_value mymonad) = rename
+
+  <span class="kw">let</span> rmdir path = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
+    <span class="kw">let</span> rpath = process_path s0 path <span class="kw">in</span>
+    <span class="kw">if</span> (is_Err2 rpath) <span class="kw">then</span> (myraise <span class="dt">ENOTDIR</span>) <span class="kw">else</span> Fs_ops2<span class="kw">.</span>rmdir rpath)
+
+  <span class="kw">let</span> stat path = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
+    <span class="kw">let</span> rpath = process_path s0 path <span class="kw">in</span>
+    <span class="kw">if</span> (is_Err2 rpath) <span class="kw">then</span> (myraise <span class="dt">ENOTDIR</span>) <span class="kw">else</span> Fs_ops2<span class="kw">.</span>stat rpath)
+
+  <span class="kw">let</span> truncate path len = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
+    <span class="kw">let</span> rpath = process_path s0 path <span class="kw">in</span>
+    <span class="kw">if</span> (is_Err2 rpath) <span class="kw">then</span> (myraise <span class="dt">ENOTDIR</span>) <span class="kw">else</span> Fs_ops2<span class="kw">.</span>truncate rpath len)
+
+  <span class="kw">let</span> unlink path = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
+    <span class="kw">let</span> rpath = process_path s0 path <span class="kw">in</span>
+    <span class="kw">if</span> (is_Err2 rpath) <span class="kw">then</span> (myraise <span class="dt">ENOTDIR</span>) <span class="kw">else</span> Fs_ops2<span class="kw">.</span>unlink rpath)
+
+  <span class="kw">let</span> write path ofs bs len = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
+    <span class="kw">let</span> rpath = process_path s0 path <span class="kw">in</span>
+    <span class="kw">if</span> (is_Err2 rpath) <span class="kw">then</span> (myraise <span class="dt">ENOTDIR</span>) <span class="kw">else</span> Fs_ops2<span class="kw">.</span>write rpath ofs bs len)
+
+
+<span class="kw">end</span>
+</code></pre>
+<h2 id="transition-system"><a href="#transition-system">Transition system</a></h2>
+<p>The model is of a labelled transition system from state to state, but where each transition may result in a return to userland (of a value or an error). FIXME need to be non-determinisitic eg in write and read behaviour.</p>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+<span class="ot">module</span> Transition_system = <span class="kw">struct</span>
+
+  <span class="ot">open</span> Prelude 
+  <span class="ot">open</span> Fs_types
+  <span class="ot">open</span> Fs_ops2
+  <span class="ot">open</span> Fs_ops3
+
+  <span class="co">(* the transition function takes a state, a label, and returns an updated state with a possible value returned, or an error *)</span>
+  <span class="kw">let</span> trans s0 lbl = (
+    <span class="kw">let</span> m = (<span class="kw">match</span> lbl <span class="kw">with</span> 
+      | <span class="dt">LINK</span> (s,d) -&gt; (link s d)
+      | <span class="dt">MKDIR</span> (s,p) -&gt; (mkdir s p)
+      | <span class="dt">OPEN</span> (p,fs) -&gt; (_open p fs)
+      | <span class="dt">READ</span> (p,i,j) -&gt; (read p i j)
+      | <span class="dt">READDIR</span> p -&gt; (readdir p)
+      | <span class="dt">RENAME</span> (s,d) -&gt; (rename s d)
+      | <span class="dt">RMDIR</span> p -&gt; (rmdir p)
+      | <span class="dt">STAT</span> p -&gt; (stat p)
+      | <span class="dt">TRUNCATE</span> (p,l) -&gt; (truncate p l)
+      | <span class="dt">UNLINK</span> p -&gt; (unlink p)
+      | <span class="dt">WRITE</span> (p,ofs,bs,len) -&gt; (write p ofs bs len))
+    <span class="kw">in</span>
+    <span class="kw">let</span> r = run_mymonad m s0 <span class="kw">in</span>
+    <span class="kw">let</span> (s,v) = (<span class="kw">match</span> r <span class="kw">with</span> 
+      | <span class="dt">Inl</span>(s,e) -&gt; (s,<span class="dt">Inl</span> e)
+      | <span class="dt">Inr</span>(s,v) -&gt; (s,<span class="dt">Inr</span> v))
+    <span class="kw">in</span>
+    (s,v))
+  <span class="kw">let</span> (_:state -&gt; ty_label -&gt; (state * (error,ret_value)sum)) = trans
+  
+<span class="kw">end</span>
+</code></pre>
+</body>
+</html>
