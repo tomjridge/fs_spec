@@ -62,7 +62,10 @@ code > span.er { color: #ff0000; font-weight: bold; }
 <pre><code>#use &quot;topfind&quot;;;
 #require &quot;unix&quot;;;
 #require &quot;bigarray&quot;;;
-#use &quot;fs_spec.toplevel.ml&quot;;;</code></pre>
+(* #cd &quot;/tmp/l/general/research/fs/fs_spec/src&quot;;; *)
+#use &quot;fs_spec.toplevel.ml&quot;;;
+open Fs_spec;;
+open Fs_spec_everything;;</code></pre>
 <h1 id="fs_spec.ml"><a href="#fs_spec.ml">fs_spec.ml</a></h1>
 <h2 id="prelude"><a href="#prelude">Prelude</a></h2>
 <p>The initial code for <code>MyDynArray</code> is a hacky attempt to implement dynamic arrays. Later I wanted functional arrays (no update in place) which I tacked on. TODO this all needs to be redone. We want a functional interface and an efficient implementation that assumes linear usage (ie updates in place). We should also check that uses are linear.</p>
@@ -74,14 +77,15 @@ code > span.er { color: #ff0000; font-weight: bold; }
   
   <span class="kw">type</span> myfusebuffer = (<span class="dt">char</span>, Bigarray<span class="kw">.</span>int8_unsigned_elt, Bigarray<span class="kw">.</span>c_layout) Bigarray<span class="kw">.</span>Array1<span class="kw">.</span>t
   
-  <span class="kw">type</span> t = myfusebuffer <span class="co">(* keep abstract *)</span>
+  <span class="kw">type</span> t = myfusebuffer <span class="co">(* keep abstract? *)</span>
   
-  <span class="kw">let</span> get_array (da:t) = (da:myfusebuffer)
+  <span class="co">(* let get_array (da:t) = (da:myfusebuffer) *)</span>
 
   <span class="co">(* FIXME hopefully this works with 0 length arrays *)</span>
+  <span class="co">(* target &lt;= resize&#39; target cur *)</span>
   <span class="kw">let</span> <span class="kw">rec</span> resize&#39; target cur = (
     <span class="kw">let</span> cur = (<span class="kw">if</span> cur=0 <span class="kw">then</span> 1 <span class="kw">else</span> cur) <span class="kw">in</span>
-    <span class="kw">if</span> target &lt; cur <span class="kw">then</span> cur <span class="kw">else</span> resize&#39; target (2*cur))
+    <span class="kw">if</span> target &lt;= cur <span class="kw">then</span> cur <span class="kw">else</span> resize&#39; target (2*cur))
   
   <span class="co">(* resize an array so that it is at least as big as n; invariant: minsize &lt;= dim (resize da minsize) *)</span>
   <span class="kw">let</span> resize da minsize = (
@@ -90,8 +94,7 @@ code > span.er { color: #ff0000; font-weight: bold; }
     <span class="kw">if</span> (newsize = cur) <span class="kw">then</span> da <span class="kw">else</span> (
       <span class="kw">let</span> newbuf = A<span class="kw">.</span>create (A<span class="kw">.</span>kind da) (A<span class="kw">.</span>layout da) newsize <span class="kw">in</span>
       <span class="kw">let</span> _ = A<span class="kw">.</span>blit da (A<span class="kw">.</span>sub newbuf 0 (A<span class="kw">.</span>dim da)) <span class="kw">in</span>
-      newbuf
-    ))
+      newbuf))
       
 <span class="kw">end</span>
 
@@ -105,26 +108,31 @@ code > span.er { color: #ff0000; font-weight: bold; }
 
   <span class="kw">val</span> of_string : <span class="dt">string</span> -&gt; t
 
+  <span class="kw">val</span> to_array: t -&gt; myfusebuffer
+
+  <span class="kw">val</span> to_string: t -&gt; <span class="dt">string</span>
+
+  <span class="kw">val</span> repn: t -&gt; <span class="dt">int</span> * myfusebuffer
+
   <span class="kw">val</span> create : <span class="dt">unit</span> -&gt; t
 
   <span class="kw">val</span> dim : t -&gt; <span class="dt">int</span>
 
   <span class="kw">val</span> resize : t -&gt; <span class="dt">int</span> -&gt; t
 
-  <span class="kw">val</span> blit : t * <span class="dt">int</span> * <span class="dt">int</span> -&gt; t * <span class="dt">int</span> -&gt; t
-
-  <span class="kw">val</span> blit_array1: t * <span class="dt">int</span> * <span class="dt">int</span> -&gt; myfusebuffer * <span class="dt">int</span> -&gt; <span class="dt">int</span>
-
   <span class="kw">val</span> get: t -&gt; <span class="dt">int</span> -&gt; <span class="dt">char</span>
 
   <span class="kw">val</span> set: t -&gt; <span class="dt">int</span> -&gt; <span class="dt">char</span> -&gt; t
 
-  <span class="kw">val</span> to_array: t -&gt; myfusebuffer
+  <span class="kw">val</span> blit : t * <span class="dt">int</span> * <span class="dt">int</span> -&gt; t * <span class="dt">int</span> -&gt; t
+
+  <span class="co">(* FIXME don&#39;t need if have to_array etc? *)</span>
+  <span class="co">(* val blit_array1: t * int * int -&gt; myfusebuffer * int -&gt; int *)</span>
 
   <span class="kw">val</span> sub: t -&gt; <span class="dt">int</span> -&gt; <span class="dt">int</span> -&gt; t
 
-  <span class="co">(* form a new array based on arr1, but with data from arr2, at ofs, length len *)</span>
-  <span class="kw">val</span> write: t -&gt; <span class="dt">int</span> -&gt; t -&gt; <span class="dt">int</span> -&gt; <span class="dt">int</span> -&gt; t
+  <span class="co">(* copy bytes from arr1 to arr2, giving a new array *)</span>
+  <span class="kw">val</span> write: (t*<span class="dt">int</span>*<span class="dt">int</span>) -&gt; (t*<span class="dt">int</span>) -&gt; t
 
 <span class="kw">end</span>
 
@@ -139,11 +147,12 @@ code > span.er { color: #ff0000; font-weight: bold; }
   <span class="co">(* i is the length of the dynamic array, given some implementation; invariant (i,arr): i &lt;= dim arr *)</span>
   <span class="kw">type</span> t = <span class="dt">int</span> * MyDynArray1<span class="kw">.</span>t
 
+  <span class="kw">let</span> repn (i,arr) = (i,arr)
+
   <span class="kw">let</span> dim (i,arr) = i
 
   <span class="kw">let</span> resize (i,arr) j = (j,MyDynArray1<span class="kw">.</span>resize arr j)
 
-  <span class="co">(* FIXME what if dim arr = 0 ? *)</span>
   <span class="kw">let</span> of_array arr = (A<span class="kw">.</span>dim arr,arr)
 
   <span class="co">(* convenience only; don&#39;t use in production code *)</span>
@@ -152,10 +161,33 @@ code > span.er { color: #ff0000; font-weight: bold; }
     <span class="kw">let</span> contents : myfusebuffer = A<span class="kw">.</span>of_array Bigarray<span class="kw">.</span><span class="dt">char</span> Bigarray<span class="kw">.</span>c_layout arr <span class="kw">in</span>
     of_array contents)
 
+  <span class="co">(* FIXME we could return the underlying array directly, with a sub *)</span>
+  <span class="kw">let</span> to_array (i,arr1) = (
+    <span class="kw">let</span> arr2 = A<span class="kw">.</span>create Bigarray<span class="kw">.</span><span class="dt">char</span> Bigarray<span class="kw">.</span>c_layout i <span class="kw">in</span>
+    <span class="kw">let</span> _ = A<span class="kw">.</span>blit (A<span class="kw">.</span>sub arr1 0 i) arr2 <span class="kw">in</span>
+    arr2)
+
+  <span class="kw">let</span> to_string (i,arr1) = (
+    <span class="kw">let</span> s = String<span class="kw">.</span>create i <span class="kw">in</span>
+    <span class="kw">let</span> _ = 
+      <span class="kw">for</span> j=0 <span class="kw">to</span> i<span class="dv">-1</span> <span class="kw">do</span>
+        String<span class="kw">.</span>set s j (A<span class="kw">.</span>get arr1 j)
+      <span class="kw">done</span>
+    <span class="kw">in</span>
+    s)
+
   <span class="kw">let</span> create () = (
     <span class="kw">let</span> arr = A<span class="kw">.</span>create Bigarray<span class="kw">.</span><span class="dt">char</span> Bigarray<span class="kw">.</span>c_layout 4096 <span class="kw">in</span>
     <span class="kw">let</span> _ = A<span class="kw">.</span>fill arr <span class="ch">&#39;\x00&#39;</span> <span class="kw">in</span>
     (0, arr))
+
+  <span class="kw">let</span> get (i,arr) j = (<span class="kw">if</span> j&lt;i <span class="kw">then</span> A<span class="kw">.</span>get arr j <span class="kw">else</span> raise (<span class="dt">Invalid_argument</span> <span class="st">&quot;MyDynArray2: get, index out of bounds&quot;</span>))
+
+  <span class="kw">let</span> set (i,arr) j c = (
+    <span class="kw">let</span> arr = (<span class="kw">if</span> j &gt; A<span class="kw">.</span>dim arr <span class="kw">then</span> (MyDynArray1<span class="kw">.</span>resize arr j) <span class="kw">else</span> (arr)) <span class="kw">in</span>
+    <span class="kw">let</span> i = (<span class="kw">if</span> j &gt;= i <span class="kw">then</span> j+1 <span class="kw">else</span> i) <span class="kw">in</span>
+    <span class="kw">let</span> _ = A<span class="kw">.</span>set arr j c <span class="kw">in</span>
+    (i,arr))
 
   <span class="co">(* assumes ofs1+len1&lt;i (sim with the other ops) ; resizes if necessary, ie may not mutate in place! *)</span>
   <span class="kw">let</span> blit ((i1,arr1),ofs1,len1) ((i2,arr2),ofs2) = (
@@ -168,30 +200,19 @@ code > span.er { color: #ff0000; font-weight: bold; }
 
   <span class="co">(* arr2 is a buffer eg that we are reading to; we return the number of bytes copied *)</span>
   <span class="co">(* assumes ofs1+len1 &lt; i1 *)</span>
-  <span class="kw">let</span> blit_array1 ((i1,arr1),ofs1,len1) (arr2,ofs2) = (
-    <span class="kw">let</span> len = min len1 (A<span class="kw">.</span>dim arr2 - ofs2) <span class="kw">in</span>
-    <span class="kw">let</span> _ = A<span class="kw">.</span>blit (A<span class="kw">.</span>sub arr1 ofs1 len) (A<span class="kw">.</span>sub arr2 ofs2 len) <span class="kw">in</span>
-    len)
-
-  <span class="kw">let</span> get (i,arr) j = (<span class="kw">if</span> j&lt;i <span class="kw">then</span> A<span class="kw">.</span>get arr j <span class="kw">else</span> raise (<span class="dt">Invalid_argument</span> <span class="st">&quot;MyDynArray2: get, index out of bounds&quot;</span>))
-
-  <span class="kw">let</span> set (i,arr) j c = (
-    <span class="kw">let</span> arr = (<span class="kw">if</span> j &gt; A<span class="kw">.</span>dim arr <span class="kw">then</span> (MyDynArray1<span class="kw">.</span>resize arr j) <span class="kw">else</span> (arr)) <span class="kw">in</span>
-    <span class="kw">let</span> i = (<span class="kw">if</span> j &gt;= i <span class="kw">then</span> j+1 <span class="kw">else</span> i) <span class="kw">in</span>
-    <span class="kw">let</span> _ = A<span class="kw">.</span>set arr j c <span class="kw">in</span>
-    (i,arr))
-
-  <span class="kw">let</span> to_array (i,arr1) = (
-    <span class="kw">let</span> arr2 = A<span class="kw">.</span>create Bigarray<span class="kw">.</span><span class="dt">char</span> Bigarray<span class="kw">.</span>c_layout i <span class="kw">in</span>
-    <span class="kw">let</span> _ = A<span class="kw">.</span>blit (A<span class="kw">.</span>sub arr1 0 i) arr2 <span class="kw">in</span>
-    arr2)
+  <span class="co">(*</span>
+<span class="co">  let blit_array1 ((i1,arr1),ofs1,len1) (arr2,ofs2) = (</span>
+<span class="co">    let len = min len1 (A.dim arr2 - ofs2) in</span>
+<span class="co">    let _ = A.blit (A.sub arr1 ofs1 len) (A.sub arr2 ofs2 len) in</span>
+<span class="co">    len)</span>
+<span class="co">  *)</span>
 
   <span class="co">(* FIXME we need a module representing arrays, but where the ops act functionally ie they return a new array every time *)</span>
   <span class="co">(* FIXME decide what the functional interface to arrays should be; maybe we should mutate and assume arrays are used linearly? *)</span>
   <span class="co">(* behaves as functional call *)</span>
   <span class="kw">let</span> sub (i,arr) ofs len = (
     <span class="kw">let</span> arr2 = A<span class="kw">.</span>sub arr ofs len <span class="kw">in</span>
-    (len,arr2))
+    (A<span class="kw">.</span>dim arr2,arr2))
  
   <span class="kw">let</span> copy (i,arr) = (
     <span class="kw">let</span> arr&#39; = create () <span class="kw">in</span>
@@ -199,16 +220,14 @@ code > span.er { color: #ff0000; font-weight: bold; }
     arr&#39;)
 
   <span class="co">(* behaves as functional call *)</span>
-  <span class="kw">let</span> write arr1 ofs1 (i2,arr2) ofs2 len2 = (
-    <span class="kw">let</span> arr1 = copy arr1 <span class="kw">in</span>
-    <span class="kw">let</span> _ = blit ((i2,arr2),ofs2,len2) (arr1,ofs1) <span class="kw">in</span>
-    arr1)
+  <span class="kw">let</span> write ((i2,arr2),ofs2,len2) (arr1,ofs1)  = (
+    <span class="kw">let</span> arr2 = blit ((i2,arr2),ofs2,len2) (arr1,ofs1) <span class="kw">in</span>
+    arr2)
    
 <span class="kw">end</span>
 
-<span class="ot">module</span> MyDynArray = (<span class="dt">MyDynArray2</span> : <span class="dt">MYDYNARRAY</span>)
-
-
+<span class="ot">module</span> MyDynArray = (<span class="dt">MyDynArray2</span> : <span class="dt">MYDYNARRAY</span>)</code></pre>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
 <span class="ot">module</span> Prelude = <span class="kw">struct</span>
 
   <span class="ot">module</span> <span class="kw">type</span> <span class="dt">MYSET</span> = <span class="kw">sig</span>
@@ -1005,6 +1024,38 @@ code > span.er { color: #ff0000; font-weight: bold; }
     | <span class="dt">UNLINK</span> <span class="kw">of</span> <span class="dt">string</span>
     | <span class="dt">WRITE</span> <span class="kw">of</span> (<span class="dt">string</span> * <span class="dt">int</span> * bytes * <span class="dt">int</span>)
 
+  <span class="co">(* naive conversion of labels to strings *)</span>
+  <span class="kw">let</span> string_of_perm p = (string_of_int p)
+
+  <span class="kw">let</span> string_of_flag f = (<span class="kw">match</span> f <span class="kw">with</span>
+    | <span class="dt">O_RDONLY</span>       -&gt; <span class="st">&quot;O_RDONLY&quot;</span>                 
+    | <span class="dt">O_WRONLY</span>       -&gt; <span class="st">&quot;O_WRONLY&quot;</span>                 
+    | <span class="dt">O_RDWR</span>         -&gt; <span class="st">&quot;O_RDWR&quot;</span>                   
+    | <span class="dt">O_NONBLOCK</span>     -&gt; <span class="st">&quot;O_NONBLOCK&quot;</span>               
+    | <span class="dt">O_APPEND</span>       -&gt; <span class="st">&quot;O_APPEND&quot;</span>                 
+    | <span class="dt">O_CREAT</span>        -&gt; <span class="st">&quot;O_CREAT&quot;</span>                  
+    | <span class="dt">O_TRUNC</span>        -&gt; <span class="st">&quot;O_TRUNC&quot;</span>                  
+    | <span class="dt">O_EXCL</span>         -&gt; <span class="st">&quot;O_EXCL&quot;</span>                   
+    | <span class="dt">O_NOCTTY</span>       -&gt; <span class="st">&quot;O_NOCTTY&quot;</span>                 
+    | <span class="dt">O_DSYNC</span>        -&gt; <span class="st">&quot;O_DSYNC&quot;</span>                                                   
+    | <span class="dt">O_SYNC</span>         -&gt; <span class="st">&quot;O_SYNC&quot;</span>                                                    
+    | <span class="dt">O_RSYNC</span>        -&gt; <span class="st">&quot;O_RSYNC&quot;</span>                                                   
+    | <span class="dt">O_SHARE_DELETE</span> -&gt; <span class="st">&quot;O_SHARE_DELETE&quot;</span>)
+
+  <span class="kw">let</span> string_of_flags fs = (<span class="st">&quot;[&quot;</span>^(String<span class="kw">.</span>concat <span class="st">&quot;;&quot;</span> (List<span class="kw">.</span>map string_of_flag fs))^<span class="st">&quot;]&quot;</span>)
+
+  <span class="kw">let</span> string_of_label lbl = (<span class="kw">match</span> lbl <span class="kw">with</span>
+    | <span class="dt">LINK</span> (s,d) -&gt; (<span class="st">&quot;LINK(&quot;</span>^s^<span class="st">&quot;,&quot;</span>^d^<span class="st">&quot;)&quot;</span>)
+    | <span class="dt">MKDIR</span> (s,p) -&gt; (<span class="st">&quot;MKDIR(&quot;</span>^s^<span class="st">&quot;,&quot;</span>^(string_of_perm p)^<span class="st">&quot;)&quot;</span>)
+    | <span class="dt">OPEN</span> (p,fs) -&gt; (<span class="st">&quot;OPEN(&quot;</span>^p^<span class="st">&quot;,&quot;</span>^(string_of_flags fs)^<span class="st">&quot;)&quot;</span>)
+    | <span class="dt">READ</span> (p,i,j) -&gt; (<span class="st">&quot;READ(&quot;</span>^p^<span class="st">&quot;,&quot;</span>^(string_of_int i)^<span class="st">&quot;,&quot;</span>^(string_of_int j)^<span class="st">&quot;)&quot;</span>)
+    | <span class="dt">READDIR</span> p -&gt; (<span class="st">&quot;READDIR(&quot;</span>^p^<span class="st">&quot;)&quot;</span>)
+    | <span class="dt">RENAME</span> (s,d) -&gt; (<span class="st">&quot;RENAME(&quot;</span>^s^<span class="st">&quot;,&quot;</span>^d^<span class="st">&quot;)&quot;</span>)
+    | <span class="dt">RMDIR</span> p -&gt; (<span class="st">&quot;RMDIR(&quot;</span>^p^<span class="st">&quot;)&quot;</span>)
+    | <span class="dt">STAT</span> p -&gt; (<span class="st">&quot;STAT(&quot;</span>^p^<span class="st">&quot;)&quot;</span>)
+    | <span class="dt">TRUNCATE</span> (p,l) -&gt; (<span class="st">&quot;TRUNCATE(&quot;</span>^p^<span class="st">&quot;,&quot;</span>^(string_of_int l)^<span class="st">&quot;)&quot;</span>)
+    | <span class="dt">UNLINK</span> p -&gt; (<span class="st">&quot;UNLINK(&quot;</span>^p^<span class="st">&quot;)&quot;</span>)
+    | <span class="dt">WRITE</span> (p,ofs,bs,len) -&gt; (<span class="st">&quot;WRITE(&quot;</span>^p^<span class="st">&quot;,&quot;</span>^(string_of_int ofs)^<span class="st">&quot;,FIXME,&quot;</span>^(string_of_int len)^<span class="st">&quot;)&quot;</span>))
 
 <span class="kw">end</span></code></pre>
 <h2 id="lifting-basic-functions-to-state"><a href="#lifting-basic-functions-to-state">Lifting basic functions to state</a></h2>
@@ -1154,10 +1205,10 @@ code > span.er { color: #ff0000; font-weight: bold; }
   <span class="ot">open</span> Lift
   <span class="ot">open</span> Common
 
-  <span class="co">(* an initial state with a root dir *)</span>
-  <span class="kw">let</span> root = (<span class="dt">Dir_ref</span> 0, { dentries=Entries.empty }) 
 
   <span class="kw">let</span> state0 = (
+    <span class="co">(* an initial state with a root dir *)</span>
+    <span class="kw">let</span> root = (<span class="dt">Dir_ref</span> 0, { dentries=Entries.empty }) <span class="kw">in</span>
     <span class="kw">let</span> s0 = update_drs_some state0 root <span class="kw">in</span>
     s0)  
 
@@ -1174,6 +1225,10 @@ code > span.er { color: #ff0000; font-weight: bold; }
 <span class="co">    let Some(es0) = lookup_entries s0 es0_ref in</span>
 <span class="co">    es0)</span>
 <span class="co">  *)</span>
+
+  <span class="kw">let</span> get_root s0 = (
+    <span class="kw">let</span> <span class="dt">Some</span>(d) = lookup_dir s0 (<span class="dt">Dir_ref</span> 0) <span class="kw">in</span>
+    (<span class="dt">Dir_ref</span> 0, d))
 
   <span class="co">(* FIXME may prefer a version that returns a (ref,obj) option ; see eg mvdir *)</span>
   <span class="kw">let</span> resolve1 s0 (d0_ref,d0) name = (
@@ -1537,6 +1592,8 @@ code > span.er { color: #ff0000; font-weight: bold; }
     <span class="kw">let</span> inode_ref = dest_inode_ref_entry entry <span class="kw">in</span>
     <span class="kw">let</span> inode = get_inode s0 inode_ref <span class="kw">in</span>
     <span class="kw">let</span> s0 = internal_link_file s0 (inode_ref,inode) (d1_ref,d1) name1 <span class="kw">in</span>
+    <span class="co">(* FIXME bug: if d0_ref and d1_ref are the same, but we have changed d1 but reuse old d0; FIXME check we haven&#39;t made the same mistake elsewhere *)</span>
+    <span class="kw">let</span> d0 = get_dir s0 d0_ref <span class="kw">in</span>
     <span class="kw">let</span> s0 = internal_unlink s0 (d0_ref,d0) name0 <span class="kw">in</span> 
     return s0)
   <span class="kw">let</span> (_:state -&gt; (dir_ref*dir) -&gt; name -&gt; (dir_ref*dir) -&gt; name -&gt; ty_return2) = mv
@@ -1617,6 +1674,9 @@ code > span.er { color: #ff0000; font-weight: bold; }
 <pre class="sourceCode ocaml"><code class="sourceCode ocaml">
 end
 
+
+
+
 </code></pre>
 <h2 id="resolve-names"><a href="#resolve-names">Resolve names</a></h2>
 <p>We want to take a string such as <code>/x/y/z/d/</code> and process it:</p>
@@ -1667,7 +1727,7 @@ end
         <span class="kw">let</span> <span class="dt">Some</span>(dir) = lookup_dir s0 dir_ref <span class="kw">in</span> <span class="co">(* wellformedness, shouldn&#39;t fail *)</span>
         f1 (dir_ref,dir) ns))
     <span class="kw">in</span>
-    f1 root ns)
+    f1 (get_root s0) ns)
   <span class="kw">let</span> (_:state -&gt; name <span class="dt">list</span> -&gt; (dir_ref * dir) <span class="dt">option</span>) = resolve_dir_ref
 
   <span class="kw">let</span> dir_exists s0 ns = (resolve_dir_ref s0 ns &lt;&gt; <span class="dt">None</span>)
@@ -1785,8 +1845,8 @@ end
   <span class="ot">open</span> Fs_ops1
   <span class="ot">open</span> Resolve
 
-  <span class="kw">type</span> error = Fs_types<span class="kw">.</span>error
-  <span class="kw">type</span> &#39;a ty_return3 = (state * error, state * &#39;a) sum
+  <span class="co">(* type error = Fs_types.error *)</span>
+  <span class="kw">type</span> &#39;a ty_return3 = (state * Fs_types<span class="kw">.</span>error, state * &#39;a) sum
   <span class="co">(* vars u, v used eg for Mymonad u *)</span>
   <span class="kw">type</span> &#39;a mymonad = <span class="dt">Mymonad</span> <span class="kw">of</span> (state -&gt; &#39;a ty_return3)
   <span class="kw">let</span> dest_mymonad (<span class="dt">Mymonad</span> u) = u
@@ -1806,7 +1866,7 @@ end
   <span class="kw">let</span> ( &gt;&gt;= ) = bind
   
   <span class="kw">let</span> get_state = <span class="dt">Mymonad</span> (<span class="kw">fun</span> s -&gt; <span class="dt">Inr</span>(s,s))
-  <span class="kw">let</span> put_state s0 = <span class="dt">Mymonad</span> (<span class="kw">fun</span> s -&gt; <span class="dt">Inr</span>(s,<span class="dt">None1</span>))
+  <span class="kw">let</span> put_state s0 = <span class="dt">Mymonad</span> (<span class="kw">fun</span> s -&gt; <span class="dt">Inr</span>(s0,<span class="dt">None1</span>))
   <span class="kw">let</span> myraise e = <span class="dt">Mymonad</span> (<span class="kw">fun</span> s -&gt; <span class="dt">Inl</span>(s,e))
 
   <span class="kw">let</span> run_mymonad (<span class="dt">Mymonad</span> f) s = (f s)
@@ -1848,117 +1908,31 @@ end
     st_size=4096L; <span class="co">(* seems to be default on my system - but changes depending on number of entries? *)</span>
   }
 
-  <span class="co">(* FIXME surely a lot of this complexity is because this is the user land behaviour of the mv command - but we want to target the syscall interface *)</span>
-  <span class="co">(* FIXME we probably want the containing dirs as well, when doing rename; put this in resolve *)</span>
-  <span class="kw">let</span> rename rsrc rdst = (
-    get_state &gt;&gt;= (<span class="kw">fun</span> s0 -&gt; 
-    <span class="kw">match</span> rsrc <span class="kw">with</span>
-    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* no src file *)</span>
-    | <span class="dt">Fname2</span> ((i0_ref,i0),ns_src) -&gt; (
-      <span class="co">(* file exists *)</span>
-      <span class="kw">match</span> rdst <span class="kw">with</span> 
+  <span class="co">(* Fs_ops1 returns ty_return2, which apart from read is just a state *)</span>
+  <span class="kw">let</span> put_state&#39; r = put_state r.state2
+
+  <span class="kw">let</span> link spath dpath = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
+    <span class="kw">match</span> spath <span class="kw">with</span> 
+    | <span class="dt">Fname2</span>((i0_ref,i0),ns_src)  -&gt; (
+      <span class="kw">match</span> dpath <span class="kw">with</span> 
       | <span class="dt">None2</span> ns_dst -&gt; (
-        <span class="co">(* do the move; there is no file ns_dst *)</span>
-        <span class="co">(* FIXME check rename to target where parent doesn&#39;t exist *)</span>
-        <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) <span class="kw">in</span>
-        <span class="kw">match</span> resolve_dir_ref s0 (butlast ns_dst.ns2) <span class="kw">with</span>
-        | <span class="dt">None</span> -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* parent dir of dst doesn&#39;t exist *)</span>
-        | <span class="dt">Some</span>(d1_ref,d1) -&gt; (
-          put_state (Fs_ops1<span class="kw">.</span>mv s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2))))
-      | <span class="dt">Fname2</span> (_,ns_dst) -&gt; (
-        <span class="co">(* do the move; there is a file name ns_dst *)</span>
-        <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) <span class="kw">in</span>
-        <span class="kw">let</span> <span class="dt">Some</span>(d1_ref,d1) = resolve_dir_ref s0 (butlast ns_dst.ns2) <span class="kw">in</span>
-        put_state (Fs_ops1<span class="kw">.</span>mv s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2)))
-        <span class="co">(* FIXME may want to have putstate return a void value *)</span>
-      | <span class="dt">Dname2</span> ((d0_ref,d0),ns_dst) -&gt; (myraise <span class="dt">EISDIR</span>)) <span class="co">(* FIXME test this *)</span>
-    | <span class="dt">Dname2</span> (_,ns_src) -&gt; (
-      <span class="co">(* directory exists *)</span>
-      <span class="kw">match</span> rdst <span class="kw">with</span>
-      | <span class="dt">None2</span> ns_dst -&gt; (
-        <span class="co">(* do the move; there is no file ns_dst *)</span>
-        <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) <span class="kw">in</span>
-        <span class="kw">match</span> resolve_dir_ref s0 (butlast ns_dst.ns2) <span class="kw">with</span>
-        | <span class="dt">None</span> -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* parent dir of dst doesn&#39;t exist *)</span>
-        | <span class="dt">Some</span>(d1_ref,d1) -&gt; (
-          put_state (Fs_ops1<span class="kw">.</span>mvdir s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2))))
-      | <span class="dt">Fname2</span> (_,ns_dst) -&gt; (myraise <span class="dt">ENOTDIR</span>)
-      | <span class="dt">Dname2</span> (_,ns_dst) -&gt; (
-        <span class="co">(* FIXME check if dir not empty *)</span>
-        <span class="kw">if</span> (<span class="kw">false</span>) <span class="kw">then</span> (myraise <span class="dt">ENOTEMPTY</span>) <span class="kw">else</span>
-        <span class="co">(* FIXME check if renaming to a subdir *)</span>
-        <span class="kw">if</span> (<span class="kw">false</span>) <span class="kw">then</span> (myraise <span class="dt">EINVAL</span>) <span class="kw">else</span>
-        <span class="co">(* otherwise target dir is empty; do rename *)</span>
-        <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) <span class="kw">in</span>
-        <span class="kw">let</span> <span class="dt">Some</span>(d1_ref,d1) = resolve_dir_ref s0 (butlast ns_dst.ns2) <span class="kw">in</span>
-        put_state (Fs_ops1<span class="kw">.</span>mvdir s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2))))))
-  <span class="kw">let</span> (_:rname2 -&gt; rname2 -&gt; ret_value mymonad) = rename      
+        <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_dst.ns2) <span class="kw">in</span>
+        <span class="kw">let</span> s0 = link_file s0 (i0_ref,i0) (d0_ref,d0) (last ns_dst.ns2) <span class="kw">in</span>
+        put_state&#39; s0)
+      | _ -&gt; (myraise <span class="dt">EEXIST</span>))
+    | _ -&gt; (myraise <span class="dt">ENOENT</span>))
 
-  <span class="co">(* NB doesn&#39;t include . and .. *)</span>
-  <span class="kw">let</span> readdir rname2 = (
-    get_state &gt;&gt;= (<span class="kw">fun</span> s0 -&gt; (
-    <span class="kw">match</span> rname2 <span class="kw">with</span> 
-    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* (raise (Unix_error (ENOENT,&quot;readdir&quot;,&quot;/FIXMEreaddir&quot;))) (* FIXME we may need access to the underlying path that was given by the user *) *)</span>
-    | <span class="dt">Fname2</span> _ -&gt; (myraise <span class="dt">ENOTDIR</span>) <span class="co">(* (raise (Unix_error (ENOTDIR,&quot;readdir&quot;,&quot;/FIXMEreaddir&quot;))) *)</span>
-    | <span class="dt">Dname2</span>((d0_ref,d0),ns) -&gt; (
-      <span class="kw">let</span> es0 = d0.dentries <span class="kw">in</span>
-      <span class="kw">let</span> binds = Entries<span class="kw">.</span>bindings es0 <span class="kw">in</span>
-      return (<span class="dt">Names1</span> (List<span class="kw">.</span>map fst binds))))))
-  <span class="kw">let</span> (_:rname2 -&gt; ret_value mymonad) = readdir
-  <span class="co">(* NB later we may want to also return a state, given access times can cause changes when reading etc *)</span>
-
-  <span class="kw">let</span> stat rname2 = (
-    get_state &gt;&gt;= (<span class="kw">fun</span> s0 -&gt; (
-    <span class="kw">let</span> _ = (print_endline (<span class="st">&quot;stat: &quot;</span>^(string_of_rname2 rname2))) <span class="kw">in</span>
-    <span class="kw">match</span> rname2 <span class="kw">with</span>
-    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>)  <span class="co">(* (raise (Unix_error (ENOENT,&quot;stat&quot;,&quot;/FIXMEstat&quot;))) *)</span>
-    | <span class="dt">Fname2</span>((i0_ref,i0),ns) -&gt; (return (<span class="dt">Stats1</span> (default_file_stats s0 (i0_ref,i0))))
-    | <span class="dt">Dname2</span>((d0_ref,d0),ns) -&gt; (return (<span class="dt">Stats1</span> (default_dir_stats (d0_ref,d0)))))))
-  <span class="kw">let</span> (_:rname2 -&gt; ret_value mymonad) = stat
-
-  <span class="co">(* FIXME the real spec would allow reading less than all the bytes *)</span>
-  <span class="kw">let</span> read rname2 ofs len = (
-    get_state &gt;&gt;= (<span class="kw">fun</span> s0 -&gt; (
-    <span class="kw">match</span> rname2 <span class="kw">with</span> 
-    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* (raise (Unix_error (ENOENT,&quot;read&quot;,&quot;/FIXMEread&quot;))) *)</span>
-    | <span class="dt">Dname2</span>(_,_) -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* (raise (Unix_error (ENOENT,&quot;read&quot;,&quot;/FIXMEread&quot;))) *)</span>
-    | <span class="dt">Fname2</span>((i0_ref,i0),ns) -&gt; (
-      <span class="kw">let</span> r = Fs_ops1<span class="kw">.</span>read s0 (i0_ref,i0) <span class="kw">in</span> <span class="co">(* FIXME Fs_ops1 may have to take an offset too *)</span>
-      (put_state r.state2) &gt;&gt;= (<span class="kw">fun</span> _ -&gt; (
-      <span class="kw">let</span> bs = dest_bytes1 r.ret2 <span class="kw">in</span>
-      <span class="kw">let</span> bs&#39; = MyDynArray<span class="kw">.</span>sub bs ofs len <span class="kw">in</span>
-      return (<span class="dt">Bytes1</span>(bs&#39;))))))))
-  <span class="kw">let</span> (_:rname2 -&gt; <span class="dt">int</span> -&gt; <span class="dt">int</span> -&gt; ret_value mymonad) = read
-
-  <span class="co">(* FIXME we need to make this take an offset in order to be usable, also read *)</span>
-  <span class="co">(* FIXME the real spec would allow writing less than all the bytes *)</span>
-  <span class="kw">let</span> write rname2 ofs bs len = (
-    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt; 
-    <span class="kw">match</span> rname2 <span class="kw">with</span> 
-    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* (raise (Unix_error (ENOENT,&quot;read&quot;,&quot;/FIXMEwrite&quot;))) *)</span>
-    | <span class="dt">Dname2</span>(_,_) -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* (raise (Unix_error (ENOENT,&quot;read&quot;,&quot;/FIXMEwrite&quot;))) *)</span>
-    | <span class="dt">Fname2</span>((i0_ref,i0),ns) -&gt; (
-      <span class="kw">let</span> r = Fs_ops1<span class="kw">.</span>read s0 (i0_ref,i0) <span class="kw">in</span>
-      put_state r.state2 &gt;&gt;= <span class="kw">fun</span> _ -&gt; 
-      <span class="kw">let</span> bs&#39; = dest_bytes1 r.ret2 <span class="kw">in</span>
-      <span class="co">(* want to create a new array from bs&#39; and bs *)</span>
-      <span class="kw">let</span> bs&#39;&#39; = MyDynArray<span class="kw">.</span>write bs&#39; ofs bs 0 len <span class="kw">in</span>
-      return (<span class="dt">Bytes1</span>(bs&#39;&#39;))))
-  <span class="kw">let</span> (_:rname2 -&gt; <span class="dt">int</span> -&gt; file_contents -&gt; <span class="dt">int</span> -&gt; ret_value mymonad) = write
-
-  <span class="kw">let</span> truncate rpath len = (
+  <span class="kw">let</span> mkdir rpath perms = (
+    <span class="co">(* FIXME deal with perms *)</span>
     get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
     <span class="kw">match</span> rpath <span class="kw">with</span> 
-    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>)
-    | <span class="dt">Dname2</span>(_,_) -&gt; (myraise <span class="dt">EISDIR</span>) <span class="co">(* FIXME check error messages are sensible *)</span>
-    | <span class="dt">Fname2</span>((i0_ref,i0),ns) -&gt; (
-      <span class="kw">let</span> r = Fs_ops1<span class="kw">.</span>read s0 (i0_ref,i0) <span class="kw">in</span>
-      <span class="kw">let</span> bs = dest_bytes1 r.ret2 <span class="kw">in</span>
-      <span class="co">(* create a new array, of length len, with same contents *)</span>
-      <span class="kw">let</span> bs&#39; = MyDynArray<span class="kw">.</span>resize bs len <span class="kw">in</span>
-      <span class="kw">let</span> s0 = Fs_ops1<span class="kw">.</span>write s0 (i0_ref,i0) bs&#39; <span class="kw">in</span>
-      put_state s0))
-  <span class="kw">let</span> (_:rname2 -&gt; <span class="dt">int</span> -&gt; ret_value mymonad) = truncate
+    | <span class="dt">None2</span>(ns) -&gt; (
+      <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns.ns2) <span class="kw">in</span>
+      <span class="kw">let</span> s0 = Fs_ops1<span class="kw">.</span>mkdir s0 (d0_ref,d0) (last ns.ns2) <span class="kw">in</span>
+      put_state&#39; s0)
+    | <span class="dt">Dname2</span>(_,_) -&gt; (myraise <span class="dt">EEXIST</span>)
+    | <span class="dt">Fname2</span>(_,_) -&gt; (myraise <span class="dt">EEXIST</span>))
 
   <span class="kw">let</span> open_create rpath = (
     get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
@@ -1979,10 +1953,120 @@ end
         <span class="co">(* FIXME assume dir exists; otherwise FIXME we should throw ENOENT *)</span>
         <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 dname <span class="kw">in</span>
         <span class="kw">let</span> s0 = Fs_ops1<span class="kw">.</span>touch s0 (d0_ref,d0) fname <span class="kw">in</span>
-        put_state s0)
+        put_state&#39; s0)
       | <span class="dt">Fname2</span>(_,_) -&gt; (myraise <span class="dt">ENOTDIR</span>)
       | _ -&gt; (myraise <span class="dt">ENOENT</span>)))
   <span class="kw">let</span> (_:rname2 -&gt; ret_value mymonad) = open_create
+
+
+  <span class="co">(* FIXME the real spec would allow reading less than all the bytes *)</span>
+  <span class="kw">let</span> read rname2 ofs len = (
+    get_state &gt;&gt;= (<span class="kw">fun</span> s0 -&gt; (
+    <span class="kw">match</span> rname2 <span class="kw">with</span> 
+    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* (raise (Unix_error (ENOENT,&quot;read&quot;,&quot;/FIXMEread&quot;))) *)</span>
+    | <span class="dt">Dname2</span>(_,_) -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* (raise (Unix_error (ENOENT,&quot;read&quot;,&quot;/FIXMEread&quot;))) *)</span>
+    | <span class="dt">Fname2</span>((i0_ref,i0),ns) -&gt; (
+      <span class="kw">let</span> r = Fs_ops1<span class="kw">.</span>read s0 (i0_ref,i0) <span class="kw">in</span> <span class="co">(* FIXME Fs_ops1 may have to take an offset too *)</span>
+      (put_state&#39; r) &gt;&gt;= (<span class="kw">fun</span> _ -&gt; (
+      <span class="kw">let</span> bs = dest_bytes1 r.ret2 <span class="kw">in</span>
+      <span class="kw">let</span> bs&#39; = MyDynArray<span class="kw">.</span>sub bs ofs len <span class="kw">in</span>
+      return (<span class="dt">Bytes1</span>(bs&#39;))))))))
+  <span class="kw">let</span> (_:rname2 -&gt; <span class="dt">int</span> -&gt; <span class="dt">int</span> -&gt; ret_value mymonad) = read
+
+  <span class="co">(* NB doesn&#39;t include . and .. *)</span>
+  <span class="kw">let</span> readdir rname2 = (
+    get_state &gt;&gt;= (<span class="kw">fun</span> s0 -&gt; (
+    <span class="kw">match</span> rname2 <span class="kw">with</span> 
+    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* (raise (Unix_error (ENOENT,&quot;readdir&quot;,&quot;/FIXMEreaddir&quot;))) (* FIXME we may need access to the underlying path that was given by the user *) *)</span>
+    | <span class="dt">Fname2</span> _ -&gt; (myraise <span class="dt">ENOTDIR</span>) <span class="co">(* (raise (Unix_error (ENOTDIR,&quot;readdir&quot;,&quot;/FIXMEreaddir&quot;))) *)</span>
+    | <span class="dt">Dname2</span>((d0_ref,d0),ns) -&gt; (
+      <span class="kw">let</span> es0 = d0.dentries <span class="kw">in</span>
+      <span class="kw">let</span> binds = Entries<span class="kw">.</span>bindings es0 <span class="kw">in</span>
+      return (<span class="dt">Names1</span> (List<span class="kw">.</span>map fst binds))))))
+  <span class="kw">let</span> (_:rname2 -&gt; ret_value mymonad) = readdir
+  <span class="co">(* NB later we may want to also return a state, given access times can cause changes when reading etc *)</span>
+
+  <span class="co">(* FIXME surely a lot of this complexity is because this is the user land behaviour of the mv command - but we want to target the syscall interface *)</span>
+  <span class="co">(* FIXME we probably want the containing dirs as well, when doing rename; put this in resolve *)</span>
+  <span class="co">(* FIXME rename to subdir of self? *)</span>
+  <span class="kw">let</span> rename rsrc rdst = (
+    get_state &gt;&gt;= (<span class="kw">fun</span> s0 -&gt; 
+    <span class="kw">match</span> rsrc <span class="kw">with</span>
+    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* no src file *)</span>
+    | <span class="dt">Fname2</span> ((i0_ref,i0),ns_src) -&gt; (
+      <span class="co">(* file exists *)</span>
+      <span class="kw">match</span> rdst <span class="kw">with</span> 
+      | <span class="dt">None2</span> ns_dst -&gt; (
+        <span class="co">(* do the move; there is no file ns_dst *)</span>
+        <span class="co">(* FIXME check rename to target where parent doesn&#39;t exist *)</span>
+        <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) <span class="kw">in</span>
+        <span class="kw">match</span> resolve_dir_ref s0 (butlast ns_dst.ns2) <span class="kw">with</span>
+        | <span class="dt">None</span> -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* parent dir of dst doesn&#39;t exist *)</span>
+        | <span class="dt">Some</span>(d1_ref,d1) -&gt; (
+          put_state&#39; (Fs_ops1<span class="kw">.</span>mv s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2))))
+      | <span class="dt">Fname2</span> (_,ns_dst) -&gt; (
+        <span class="co">(* do the move; there is a file name ns_dst *)</span>
+        <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) <span class="kw">in</span>
+        <span class="kw">let</span> <span class="dt">Some</span>(d1_ref,d1) = resolve_dir_ref s0 (butlast ns_dst.ns2) <span class="kw">in</span>
+        put_state&#39; (Fs_ops1<span class="kw">.</span>mv s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2)))
+        <span class="co">(* FIXME may want to have putstate return a void value *)</span>
+      | <span class="dt">Dname2</span> ((d0_ref,d0),ns_dst) -&gt; (myraise <span class="dt">EISDIR</span>)) <span class="co">(* FIXME test this *)</span>
+    | <span class="dt">Dname2</span> (_,ns_src) -&gt; (
+      <span class="co">(* directory exists *)</span>
+      <span class="kw">match</span> rdst <span class="kw">with</span>
+      | <span class="dt">None2</span> ns_dst -&gt; (
+        <span class="co">(* do the move; there is no file ns_dst *)</span>
+        <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) <span class="kw">in</span>
+        <span class="kw">match</span> resolve_dir_ref s0 (butlast ns_dst.ns2) <span class="kw">with</span>
+        | <span class="dt">None</span> -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* parent dir of dst doesn&#39;t exist *)</span>
+        | <span class="dt">Some</span>(d1_ref,d1) -&gt; (
+          put_state&#39; (Fs_ops1<span class="kw">.</span>mvdir s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2))))
+      | <span class="dt">Fname2</span> (_,ns_dst) -&gt; (myraise <span class="dt">ENOTDIR</span>)
+      | <span class="dt">Dname2</span> (_,ns_dst) -&gt; (
+        <span class="co">(* FIXME check if dir not empty *)</span>
+        <span class="kw">if</span> (<span class="kw">false</span>) <span class="kw">then</span> (myraise <span class="dt">ENOTEMPTY</span>) <span class="kw">else</span>
+        <span class="co">(* FIXME check if renaming to a subdir *)</span>
+        <span class="kw">if</span> (<span class="kw">false</span>) <span class="kw">then</span> (myraise <span class="dt">EINVAL</span>) <span class="kw">else</span>
+        <span class="co">(* otherwise target dir is empty; do rename *)</span>
+        <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) <span class="kw">in</span>
+        <span class="kw">let</span> <span class="dt">Some</span>(d1_ref,d1) = resolve_dir_ref s0 (butlast ns_dst.ns2) <span class="kw">in</span>
+        put_state&#39; (Fs_ops1<span class="kw">.</span>mvdir s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2))))))
+  <span class="kw">let</span> (_:rname2 -&gt; rname2 -&gt; ret_value mymonad) = rename      
+
+  <span class="kw">let</span> rmdir rpath = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
+    <span class="kw">match</span> rpath <span class="kw">with</span> 
+    | <span class="dt">Dname2</span>(_,ns) -&gt; (
+      <span class="co">(* FIXME for resolving a file, often useful to have dir ref as well *)</span>
+      <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns.ns2) <span class="kw">in</span>
+      <span class="kw">let</span> s0 = Fs_ops1<span class="kw">.</span>unlink s0 (d0_ref,d0) (last ns.ns2) <span class="kw">in</span>
+      put_state&#39; s0)
+    | <span class="dt">Fname2</span> _ -&gt; (myraise <span class="dt">ENOTDIR</span>)
+    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>))
+
+  <span class="kw">let</span> stat rname2 = (
+    get_state &gt;&gt;= (<span class="kw">fun</span> s0 -&gt; (
+    <span class="kw">let</span> _ = (print_endline (<span class="st">&quot;stat: &quot;</span>^(string_of_rname2 rname2))) <span class="kw">in</span>
+    <span class="kw">match</span> rname2 <span class="kw">with</span>
+    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>)  <span class="co">(* (raise (Unix_error (ENOENT,&quot;stat&quot;,&quot;/FIXMEstat&quot;))) *)</span>
+    | <span class="dt">Fname2</span>((i0_ref,i0),ns) -&gt; (return (<span class="dt">Stats1</span> (default_file_stats s0 (i0_ref,i0))))
+    | <span class="dt">Dname2</span>((d0_ref,d0),ns) -&gt; (return (<span class="dt">Stats1</span> (default_dir_stats (d0_ref,d0)))))))
+  <span class="kw">let</span> (_:rname2 -&gt; ret_value mymonad) = stat
+
+  <span class="kw">let</span> truncate rpath len = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
+    <span class="kw">match</span> rpath <span class="kw">with</span> 
+    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>)
+    | <span class="dt">Dname2</span>(_,_) -&gt; (myraise <span class="dt">EISDIR</span>) <span class="co">(* FIXME check error messages are sensible *)</span>
+    | <span class="dt">Fname2</span>((i0_ref,i0),ns) -&gt; (
+      <span class="kw">let</span> r = Fs_ops1<span class="kw">.</span>read s0 (i0_ref,i0) <span class="kw">in</span>
+      <span class="kw">let</span> bs = dest_bytes1 r.ret2 <span class="kw">in</span>
+      <span class="co">(* create a new array, of length len, with same contents *)</span>
+      <span class="kw">let</span> bs&#39; = MyDynArray<span class="kw">.</span>resize bs len <span class="kw">in</span>
+      <span class="kw">let</span> s0 = Fs_ops1<span class="kw">.</span>write s0 (i0_ref,i0) bs&#39; <span class="kw">in</span>
+      put_state&#39; s0))
+  <span class="kw">let</span> (_:rname2 -&gt; <span class="dt">int</span> -&gt; ret_value mymonad) = truncate
+
 
   <span class="kw">let</span> unlink rpath = (
     get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
@@ -1993,41 +2077,24 @@ end
       <span class="co">(* FIXME for resolving a file, often useful to have dir ref as well *)</span>
       <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns.ns2) <span class="kw">in</span>
       <span class="kw">let</span> s0 = Fs_ops1<span class="kw">.</span>unlink s0 (d0_ref,d0) (last ns.ns2) <span class="kw">in</span>
-      put_state s0))
+      put_state&#39; s0))
 
-  <span class="kw">let</span> mkdir rpath perms = (
-    <span class="co">(* FIXME deal with perms *)</span>
-    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
-    <span class="kw">match</span> rpath <span class="kw">with</span> 
-    | <span class="dt">None2</span>(ns) -&gt; (
-      <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns.ns2) <span class="kw">in</span>
-      <span class="kw">let</span> s0 = Fs_ops1<span class="kw">.</span>mkdir s0 (d0_ref,d0) (last ns.ns2) <span class="kw">in</span>
-      put_state s0)
-    | <span class="dt">Dname2</span>(_,_) -&gt; (myraise <span class="dt">EEXIST</span>)
-    | <span class="dt">Fname2</span>(_,_) -&gt; (myraise <span class="dt">EEXIST</span>))
-
-  <span class="kw">let</span> link spath dpath = (
-    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
-    <span class="kw">match</span> spath <span class="kw">with</span> 
-    | <span class="dt">Fname2</span>((i0_ref,i0),ns_src)  -&gt; (
-      <span class="kw">match</span> dpath <span class="kw">with</span> 
-      | <span class="dt">None2</span> ns_dst -&gt; (
-        <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_dst.ns2) <span class="kw">in</span>
-        <span class="kw">let</span> s0 = link_file s0 (i0_ref,i0) (d0_ref,d0) (last ns_dst.ns2) <span class="kw">in</span>
-        put_state s0)
-      | _ -&gt; (myraise <span class="dt">EEXIST</span>))
-    | _ -&gt; (myraise <span class="dt">ENOENT</span>))
-
-  <span class="kw">let</span> rmdir rpath = (
-    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
-    <span class="kw">match</span> rpath <span class="kw">with</span> 
-    | <span class="dt">Dname2</span>(_,ns) -&gt; (
-      <span class="co">(* FIXME for resolving a file, often useful to have dir ref as well *)</span>
-      <span class="kw">let</span> <span class="dt">Some</span>(d0_ref,d0) = resolve_dir_ref s0 (butlast ns.ns2) <span class="kw">in</span>
-      <span class="kw">let</span> s0 = Fs_ops1<span class="kw">.</span>unlink s0 (d0_ref,d0) (last ns.ns2) <span class="kw">in</span>
-      put_state s0)
-    | <span class="dt">Fname2</span> _ -&gt; (myraise <span class="dt">ENOTDIR</span>)
-    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>))
+  <span class="co">(* FIXME we need to make this take an offset in order to be usable, also read *)</span>
+  <span class="co">(* FIXME the real spec would allow writing less than all the bytes *)</span>
+  <span class="kw">let</span> write rname2 ofs bs len = (
+    get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt; 
+    <span class="kw">match</span> rname2 <span class="kw">with</span> 
+    | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* (raise (Unix_error (ENOENT,&quot;read&quot;,&quot;/FIXMEwrite&quot;))) *)</span>
+    | <span class="dt">Dname2</span>(_,_) -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* (raise (Unix_error (ENOENT,&quot;read&quot;,&quot;/FIXMEwrite&quot;))) *)</span>
+    | <span class="dt">Fname2</span>((i0_ref,i0),ns) -&gt; (
+      <span class="kw">let</span> r = Fs_ops1<span class="kw">.</span>read s0 (i0_ref,i0) <span class="kw">in</span>
+      <span class="kw">let</span> bs&#39; = dest_bytes1 r.ret2 <span class="kw">in</span>
+      <span class="co">(* want to create a new array from bs&#39; and bs *)</span>
+      <span class="kw">let</span> bs&#39;&#39; = MyDynArray<span class="kw">.</span>write (bs,0,len) (bs&#39;,ofs) <span class="kw">in</span>
+      <span class="kw">let</span> r = Fs_ops1<span class="kw">.</span>write s0 (i0_ref,i0) bs&#39;&#39; <span class="kw">in</span>
+      put_state&#39; r &gt;&gt;= <span class="kw">fun</span> _ -&gt; 
+      return (<span class="dt">Int1</span> len)))
+  <span class="kw">let</span> (_:rname2 -&gt; <span class="dt">int</span> -&gt; file_contents -&gt; <span class="dt">int</span> -&gt; ret_value mymonad) = write
 
 
 <span class="kw">end</span></code></pre>
@@ -2130,10 +2197,13 @@ end
 
   <span class="co">(* the transition function takes a state, a label, and returns an updated state with a possible value returned, or an error *)</span>
   <span class="kw">let</span> trans s0 lbl = (
+    <span class="kw">let</span> _ = print_endline (string_of_label lbl) <span class="kw">in</span>
     <span class="kw">let</span> m = (<span class="kw">match</span> lbl <span class="kw">with</span> 
       | <span class="dt">LINK</span> (s,d) -&gt; (link s d)
       | <span class="dt">MKDIR</span> (s,p) -&gt; (mkdir s p)
-      | <span class="dt">OPEN</span> (p,fs) -&gt; (_open p fs)
+      | <span class="dt">OPEN</span> (p,fs) -&gt; (
+          <span class="kw">if</span> (List<span class="kw">.</span>mem <span class="dt">O_CREAT</span> fs) <span class="kw">then</span> (open_create p <span class="co">(* FIXME fs *)</span>) 
+          <span class="kw">else</span> (_open p fs))
       | <span class="dt">READ</span> (p,i,j) -&gt; (read p i j)
       | <span class="dt">READDIR</span> p -&gt; (readdir p)
       | <span class="dt">RENAME</span> (s,d) -&gt; (rename s d)
@@ -2151,7 +2221,35 @@ end
     (s,v))
   <span class="kw">let</span> (_:state -&gt; ty_label -&gt; (state * (error,ret_value)sum)) = trans
   
+  <span class="co">(* convenience method to process a list of labels *)</span>
+
+  <span class="kw">let</span> process_labels s0 lbls = (
+    <span class="kw">let</span> f1 = (<span class="kw">fun</span> xs -&gt; <span class="kw">fun</span> lbl -&gt; 
+      <span class="kw">let</span> l = last xs <span class="kw">in</span>
+      <span class="kw">let</span> (_,_,(s,_)) = l <span class="kw">in</span>
+      <span class="kw">let</span> (s&#39;,v) = trans s lbl <span class="kw">in</span>
+      xs@[(List<span class="kw">.</span>length xs,lbl,(s&#39;,v))])
+    <span class="kw">in</span>
+    <span class="kw">let</span> dummy_lbl = <span class="dt">LINK</span>(<span class="st">&quot;dummy lbl&quot;</span>,<span class="st">&quot;dummy lbl&quot;</span>) <span class="kw">in</span>
+    <span class="kw">let</span> dummy_error_or_value = <span class="dt">Inr</span> <span class="dt">None1</span> <span class="kw">in</span>
+    List<span class="kw">.</span>fold_left f1 [(0,dummy_lbl,(s0,dummy_error_or_value))] lbls)
+  <span class="kw">let</span> (_:state -&gt; ty_label <span class="dt">list</span> -&gt; (<span class="dt">int</span> * ty_label * (state * (error,ret_value)sum)) <span class="dt">list</span>) = process_labels
+
 <span class="kw">end</span>
-</code></pre>
+
+<span class="ot">module</span> Fs_spec_everything = <span class="kw">struct</span>
+
+  <span class="ot">include</span> Prelude
+  <span class="ot">include</span> File_utils
+  <span class="ot">include</span> Fs_types
+  <span class="ot">include</span> Lift
+  <span class="ot">include</span> Common
+  <span class="ot">include</span> Fs_ops1
+  <span class="ot">include</span> Resolve
+  <span class="ot">include</span> Fs_ops2
+  <span class="ot">include</span> Fs_ops3
+  <span class="ot">include</span> Transition_system
+
+<span class="kw">end</span></code></pre>
 </body>
 </html>

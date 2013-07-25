@@ -19,7 +19,10 @@ Via findlib:
     #use "topfind";;
     #require "unix";;
     #require "bigarray";;
+    (* #cd "/tmp/l/general/research/fs/fs_spec/src";; *)
     #use "fs_spec.toplevel.ml";;
+    open Fs_spec;;
+    open Fs_spec_everything;;
 
 @old? # Interactive top-level directives
 
@@ -207,14 +210,15 @@ module MyDynArray1 = struct
   
   type myfusebuffer = (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
   
-  type t = myfusebuffer (* keep abstract *)
+  type t = myfusebuffer (* keep abstract? *)
   
-  let get_array (da:t) = (da:myfusebuffer)
+  (* let get_array (da:t) = (da:myfusebuffer) *)
 
   (* FIXME hopefully this works with 0 length arrays *)
+  (* target <= resize' target cur *)
   let rec resize' target cur = (
     let cur = (if cur=0 then 1 else cur) in
-    if target < cur then cur else resize' target (2*cur))
+    if target <= cur then cur else resize' target (2*cur))
   
   (* resize an array so that it is at least as big as n; invariant: minsize <= dim (resize da minsize) *)
   let resize da minsize = (
@@ -223,8 +227,7 @@ module MyDynArray1 = struct
     if (newsize = cur) then da else (
       let newbuf = A.create (A.kind da) (A.layout da) newsize in
       let _ = A.blit da (A.sub newbuf 0 (A.dim da)) in
-      newbuf
-    ))
+      newbuf))
       
 end
 
@@ -238,26 +241,31 @@ module type MYDYNARRAY = sig
 
   val of_string : string -> t
 
+  val to_array: t -> myfusebuffer
+
+  val to_string: t -> string
+
+  val repn: t -> int * myfusebuffer
+
   val create : unit -> t
 
   val dim : t -> int
 
   val resize : t -> int -> t
 
-  val blit : t * int * int -> t * int -> t
-
-  val blit_array1: t * int * int -> myfusebuffer * int -> int
-
   val get: t -> int -> char
 
   val set: t -> int -> char -> t
 
-  val to_array: t -> myfusebuffer
+  val blit : t * int * int -> t * int -> t
+
+  (* FIXME don't need if have to_array etc? *)
+  (* val blit_array1: t * int * int -> myfusebuffer * int -> int *)
 
   val sub: t -> int -> int -> t
 
-  (* form a new array based on arr1, but with data from arr2, at ofs, length len *)
-  val write: t -> int -> t -> int -> int -> t
+  (* copy bytes from arr1 to arr2, giving a new array *)
+  val write: (t*int*int) -> (t*int) -> t
 
 end
 
@@ -272,11 +280,12 @@ module MyDynArray2 = struct
   (* i is the length of the dynamic array, given some implementation; invariant (i,arr): i <= dim arr *)
   type t = int * MyDynArray1.t
 
+  let repn (i,arr) = (i,arr)
+
   let dim (i,arr) = i
 
   let resize (i,arr) j = (j,MyDynArray1.resize arr j)
 
-  (* FIXME what if dim arr = 0 ? *)
   let of_array arr = (A.dim arr,arr)
 
   (* convenience only; don't use in production code *)
@@ -285,10 +294,33 @@ module MyDynArray2 = struct
     let contents : myfusebuffer = A.of_array Bigarray.char Bigarray.c_layout arr in
     of_array contents)
 
+  (* FIXME we could return the underlying array directly, with a sub *)
+  let to_array (i,arr1) = (
+    let arr2 = A.create Bigarray.char Bigarray.c_layout i in
+    let _ = A.blit (A.sub arr1 0 i) arr2 in
+    arr2)
+
+  let to_string (i,arr1) = (
+    let s = String.create i in
+    let _ = 
+      for j=0 to i-1 do
+        String.set s j (A.get arr1 j)
+      done
+    in
+    s)
+
   let create () = (
     let arr = A.create Bigarray.char Bigarray.c_layout 4096 in
     let _ = A.fill arr '\x00' in
     (0, arr))
+
+  let get (i,arr) j = (if j<i then A.get arr j else raise (Invalid_argument "MyDynArray2: get, index out of bounds"))
+
+  let set (i,arr) j c = (
+    let arr = (if j > A.dim arr then (MyDynArray1.resize arr j) else (arr)) in
+    let i = (if j >= i then j+1 else i) in
+    let _ = A.set arr j c in
+    (i,arr))
 
   (* assumes ofs1+len1<i (sim with the other ops) ; resizes if necessary, ie may not mutate in place! *)
   let blit ((i1,arr1),ofs1,len1) ((i2,arr2),ofs2) = (
@@ -301,30 +333,19 @@ module MyDynArray2 = struct
 
   (* arr2 is a buffer eg that we are reading to; we return the number of bytes copied *)
   (* assumes ofs1+len1 < i1 *)
+  (*
   let blit_array1 ((i1,arr1),ofs1,len1) (arr2,ofs2) = (
     let len = min len1 (A.dim arr2 - ofs2) in
     let _ = A.blit (A.sub arr1 ofs1 len) (A.sub arr2 ofs2 len) in
     len)
-
-  let get (i,arr) j = (if j<i then A.get arr j else raise (Invalid_argument "MyDynArray2: get, index out of bounds"))
-
-  let set (i,arr) j c = (
-    let arr = (if j > A.dim arr then (MyDynArray1.resize arr j) else (arr)) in
-    let i = (if j >= i then j+1 else i) in
-    let _ = A.set arr j c in
-    (i,arr))
-
-  let to_array (i,arr1) = (
-    let arr2 = A.create Bigarray.char Bigarray.c_layout i in
-    let _ = A.blit (A.sub arr1 0 i) arr2 in
-    arr2)
+  *)
 
   (* FIXME we need a module representing arrays, but where the ops act functionally ie they return a new array every time *)
   (* FIXME decide what the functional interface to arrays should be; maybe we should mutate and assume arrays are used linearly? *)
   (* behaves as functional call *)
   let sub (i,arr) ofs len = (
     let arr2 = A.sub arr ofs len in
-    (len,arr2))
+    (A.dim arr2,arr2))
  
   let copy (i,arr) = (
     let arr' = create () in
@@ -332,15 +353,23 @@ module MyDynArray2 = struct
     arr')
 
   (* behaves as functional call *)
-  let write arr1 ofs1 (i2,arr2) ofs2 len2 = (
-    let arr1 = copy arr1 in
-    let _ = blit ((i2,arr2),ofs2,len2) (arr1,ofs1) in
-    arr1)
+  let write ((i2,arr2),ofs2,len2) (arr1,ofs1)  = (
+    let arr2 = blit ((i2,arr2),ofs2,len2) (arr1,ofs1) in
+    arr2)
    
 end
 
 module MyDynArray = (MyDynArray2 : MYDYNARRAY)
 
+@test mydynarray
+
+let arr = MyDynArray.create ()
+let arr = MyDynArray.write (MyDynArray.of_string "hello",0,5) (arr,0)
+let true = ("hello" = MyDynArray.to_string arr)
+
+let _ = MyDynArray.to_string (MyDynArray.of_string "hello")
+
+@fs_spec.ml
 
 module Prelude = struct
 
@@ -1188,6 +1217,38 @@ module Fs_types = struct
     | UNLINK of string
     | WRITE of (string * int * bytes * int)
 
+  (* naive conversion of labels to strings *)
+  let string_of_perm p = (string_of_int p)
+
+  let string_of_flag f = (match f with
+    | O_RDONLY       -> "O_RDONLY"                 
+    | O_WRONLY       -> "O_WRONLY"                 
+    | O_RDWR         -> "O_RDWR"                   
+    | O_NONBLOCK     -> "O_NONBLOCK"               
+    | O_APPEND       -> "O_APPEND"                 
+    | O_CREAT        -> "O_CREAT"                  
+    | O_TRUNC        -> "O_TRUNC"                  
+    | O_EXCL         -> "O_EXCL"                   
+    | O_NOCTTY       -> "O_NOCTTY"                 
+    | O_DSYNC        -> "O_DSYNC"                                                   
+    | O_SYNC         -> "O_SYNC"                                                    
+    | O_RSYNC        -> "O_RSYNC"                                                   
+    | O_SHARE_DELETE -> "O_SHARE_DELETE")
+
+  let string_of_flags fs = ("["^(String.concat ";" (List.map string_of_flag fs))^"]")
+
+  let string_of_label lbl = (match lbl with
+    | LINK (s,d) -> ("LINK("^s^","^d^")")
+    | MKDIR (s,p) -> ("MKDIR("^s^","^(string_of_perm p)^")")
+    | OPEN (p,fs) -> ("OPEN("^p^","^(string_of_flags fs)^")")
+    | READ (p,i,j) -> ("READ("^p^","^(string_of_int i)^","^(string_of_int j)^")")
+    | READDIR p -> ("READDIR("^p^")")
+    | RENAME (s,d) -> ("RENAME("^s^","^d^")")
+    | RMDIR p -> ("RMDIR("^p^")")
+    | STAT p -> ("STAT("^p^")")
+    | TRUNCATE (p,l) -> ("TRUNCATE("^p^","^(string_of_int l)^")")
+    | UNLINK p -> ("UNLINK("^p^")")
+    | WRITE (p,ofs,bs,len) -> ("WRITE("^p^","^(string_of_int ofs)^",FIXME,"^(string_of_int len)^")"))
 
 end
 
@@ -1386,10 +1447,10 @@ module Fs_ops1 = struct
   open Lift
   open Common
 
-  (* an initial state with a root dir *)
-  let root = (Dir_ref 0, { dentries=Entries.empty }) 
 
   let state0 = (
+    (* an initial state with a root dir *)
+    let root = (Dir_ref 0, { dentries=Entries.empty }) in
     let s0 = update_drs_some state0 root in
     s0)  
 
@@ -1406,6 +1467,10 @@ module Fs_ops1 = struct
     let Some(es0) = lookup_entries s0 es0_ref in
     es0)
   *)
+
+  let get_root s0 = (
+    let Some(d) = lookup_dir s0 (Dir_ref 0) in
+    (Dir_ref 0, d))
 
   (* FIXME may prefer a version that returns a (ref,obj) option ; see eg mvdir *)
   let resolve1 s0 (d0_ref,d0) name = (
@@ -1694,9 +1759,45 @@ Atomicity:
     let inode_ref = dest_inode_ref_entry entry in
     let inode = get_inode s0 inode_ref in
     let s0 = internal_link_file s0 (inode_ref,inode) (d1_ref,d1) name1 in
+    (* FIXME bug: if d0_ref and d1_ref are the same, but we have changed d1 but reuse old d0; FIXME check we haven't made the same mistake elsewhere *)
+    let d0 = get_dir s0 d0_ref in
     let s0 = internal_unlink s0 (d0_ref,d0) name0 in 
     return s0)
   let (_:state -> (dir_ref*dir) -> name -> (dir_ref*dir) -> name -> ty_return2) = mv
+
+
+@test mv
+
+let s0 = DummyFs.state0
+let s = s0
+let (s,Inr _) = trans s (OPEN("/tom.txt",[O_CREAT]))
+let _ = print_endline (string_of_state s)
+let r = Fs_ops1.mv s (Dir_ref 0,get_dir s (Dir_ref 0)) "tom.txt" (Dir_ref 0,get_dir s (Dir_ref 0)) "jen.txt"
+let s = r.state2
+let _ = print_endline (string_of_state s)
+
+let s0 = DummyFs.state0
+let s = s0
+let (s,Inr _) = trans s (OPEN("/tom.txt",[O_CREAT]))
+let _ = print_endline (string_of_state s)
+let s0 = s
+let (d0_ref,d0) = (Dir_ref 0,get_dir s0 (Dir_ref 0)) 
+let (d1_ref,d1) = (Dir_ref 0,get_dir s0 (Dir_ref 0)) 
+let name0 = "tom.txt"
+let name1 = "jen.txt"
+
+  let mv s0 (d0_ref,d0) name0 (d1_ref,d1) name1 = (
+    let Some(entry) = resolve1 s0 (d0_ref,d0) name0 in
+    let inode_ref = dest_inode_ref_entry entry in
+    let inode = get_inode s0 inode_ref in
+    let s0 = internal_link_file s0 (inode_ref,inode) (d1_ref,d1) name1 in
+    (* FIXME bug: if d0_ref and d1_ref are the same, but we have changed d1 but reuse old d0; FIXME check we haven't made the same mistake elsewhere *)
+    let d0 = get_dir s0 d0_ref in
+    let s0 = internal_unlink s0 (d0_ref,d0) name0 in 
+    return s0)
+  let (_:state -> (dir_ref*dir) -> name -> (dir_ref*dir) -> name -> ty_return2) = mv
+
+let _ = print_endline (string_of_state s0)
 
 
 @dep.md
@@ -1873,6 +1974,9 @@ end
 
 
 
+
+
+
 @fs_spec.md
 ## Resolve names
 
@@ -1924,7 +2028,7 @@ module Resolve = struct
         let Some(dir) = lookup_dir s0 dir_ref in (* wellformedness, shouldn't fail *)
         f1 (dir_ref,dir) ns))
     in
-    f1 root ns)
+    f1 (get_root s0) ns)
   let (_:state -> name list -> (dir_ref * dir) option) = resolve_dir_ref
 
   let dir_exists s0 ns = (resolve_dir_ref s0 ns <> None)
@@ -2063,8 +2167,8 @@ module Fs_ops2 = struct
   open Fs_ops1
   open Resolve
 
-  type error = Fs_types.error
-  type 'a ty_return3 = (state * error, state * 'a) sum
+  (* type error = Fs_types.error *)
+  type 'a ty_return3 = (state * Fs_types.error, state * 'a) sum
   (* vars u, v used eg for Mymonad u *)
   type 'a mymonad = Mymonad of (state -> 'a ty_return3)
   let dest_mymonad (Mymonad u) = u
@@ -2084,7 +2188,7 @@ module Fs_ops2 = struct
   let ( >>= ) = bind
   
   let get_state = Mymonad (fun s -> Inr(s,s))
-  let put_state s0 = Mymonad (fun s -> Inr(s,None1))
+  let put_state s0 = Mymonad (fun s -> Inr(s0,None1))
   let myraise e = Mymonad (fun s -> Inl(s,e))
 
   let run_mymonad (Mymonad f) s = (f s)
@@ -2126,117 +2230,31 @@ module Fs_ops2 = struct
     st_size=4096L; (* seems to be default on my system - but changes depending on number of entries? *)
   }
 
-  (* FIXME surely a lot of this complexity is because this is the user land behaviour of the mv command - but we want to target the syscall interface *)
-  (* FIXME we probably want the containing dirs as well, when doing rename; put this in resolve *)
-  let rename rsrc rdst = (
-    get_state >>= (fun s0 -> 
-    match rsrc with
-    | None2 _ -> (myraise ENOENT) (* no src file *)
-    | Fname2 ((i0_ref,i0),ns_src) -> (
-      (* file exists *)
-      match rdst with 
+  (* Fs_ops1 returns ty_return2, which apart from read is just a state *)
+  let put_state' r = put_state r.state2
+
+  let link spath dpath = (
+    get_state >>= fun s0 ->
+    match spath with 
+    | Fname2((i0_ref,i0),ns_src)  -> (
+      match dpath with 
       | None2 ns_dst -> (
-        (* do the move; there is no file ns_dst *)
-        (* FIXME check rename to target where parent doesn't exist *)
-        let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) in
-        match resolve_dir_ref s0 (butlast ns_dst.ns2) with
-        | None -> (myraise ENOENT) (* parent dir of dst doesn't exist *)
-        | Some(d1_ref,d1) -> (
-          put_state (Fs_ops1.mv s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2))))
-      | Fname2 (_,ns_dst) -> (
-        (* do the move; there is a file name ns_dst *)
-        let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) in
-        let Some(d1_ref,d1) = resolve_dir_ref s0 (butlast ns_dst.ns2) in
-        put_state (Fs_ops1.mv s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2)))
-        (* FIXME may want to have putstate return a void value *)
-      | Dname2 ((d0_ref,d0),ns_dst) -> (myraise EISDIR)) (* FIXME test this *)
-    | Dname2 (_,ns_src) -> (
-      (* directory exists *)
-      match rdst with
-      | None2 ns_dst -> (
-        (* do the move; there is no file ns_dst *)
-        let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) in
-        match resolve_dir_ref s0 (butlast ns_dst.ns2) with
-        | None -> (myraise ENOENT) (* parent dir of dst doesn't exist *)
-        | Some(d1_ref,d1) -> (
-          put_state (Fs_ops1.mvdir s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2))))
-      | Fname2 (_,ns_dst) -> (myraise ENOTDIR)
-      | Dname2 (_,ns_dst) -> (
-        (* FIXME check if dir not empty *)
-        if (false) then (myraise ENOTEMPTY) else
-        (* FIXME check if renaming to a subdir *)
-        if (false) then (myraise EINVAL) else
-        (* otherwise target dir is empty; do rename *)
-        let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) in
-        let Some(d1_ref,d1) = resolve_dir_ref s0 (butlast ns_dst.ns2) in
-        put_state (Fs_ops1.mvdir s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2))))))
-  let (_:rname2 -> rname2 -> ret_value mymonad) = rename      
+        let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_dst.ns2) in
+        let s0 = link_file s0 (i0_ref,i0) (d0_ref,d0) (last ns_dst.ns2) in
+        put_state' s0)
+      | _ -> (myraise EEXIST))
+    | _ -> (myraise ENOENT))
 
-  (* NB doesn't include . and .. *)
-  let readdir rname2 = (
-    get_state >>= (fun s0 -> (
-    match rname2 with 
-    | None2 _ -> (myraise ENOENT) (* (raise (Unix_error (ENOENT,"readdir","/FIXMEreaddir"))) (* FIXME we may need access to the underlying path that was given by the user *) *)
-    | Fname2 _ -> (myraise ENOTDIR) (* (raise (Unix_error (ENOTDIR,"readdir","/FIXMEreaddir"))) *)
-    | Dname2((d0_ref,d0),ns) -> (
-      let es0 = d0.dentries in
-      let binds = Entries.bindings es0 in
-      return (Names1 (List.map fst binds))))))
-  let (_:rname2 -> ret_value mymonad) = readdir
-  (* NB later we may want to also return a state, given access times can cause changes when reading etc *)
-
-  let stat rname2 = (
-    get_state >>= (fun s0 -> (
-    let _ = (print_endline ("stat: "^(string_of_rname2 rname2))) in
-    match rname2 with
-    | None2 _ -> (myraise ENOENT)  (* (raise (Unix_error (ENOENT,"stat","/FIXMEstat"))) *)
-    | Fname2((i0_ref,i0),ns) -> (return (Stats1 (default_file_stats s0 (i0_ref,i0))))
-    | Dname2((d0_ref,d0),ns) -> (return (Stats1 (default_dir_stats (d0_ref,d0)))))))
-  let (_:rname2 -> ret_value mymonad) = stat
-
-  (* FIXME the real spec would allow reading less than all the bytes *)
-  let read rname2 ofs len = (
-    get_state >>= (fun s0 -> (
-    match rname2 with 
-    | None2 _ -> (myraise ENOENT) (* (raise (Unix_error (ENOENT,"read","/FIXMEread"))) *)
-    | Dname2(_,_) -> (myraise ENOENT) (* (raise (Unix_error (ENOENT,"read","/FIXMEread"))) *)
-    | Fname2((i0_ref,i0),ns) -> (
-      let r = Fs_ops1.read s0 (i0_ref,i0) in (* FIXME Fs_ops1 may have to take an offset too *)
-      (put_state r.state2) >>= (fun _ -> (
-      let bs = dest_bytes1 r.ret2 in
-      let bs' = MyDynArray.sub bs ofs len in
-      return (Bytes1(bs'))))))))
-  let (_:rname2 -> int -> int -> ret_value mymonad) = read
-
-  (* FIXME we need to make this take an offset in order to be usable, also read *)
-  (* FIXME the real spec would allow writing less than all the bytes *)
-  let write rname2 ofs bs len = (
-    get_state >>= fun s0 -> 
-    match rname2 with 
-    | None2 _ -> (myraise ENOENT) (* (raise (Unix_error (ENOENT,"read","/FIXMEwrite"))) *)
-    | Dname2(_,_) -> (myraise ENOENT) (* (raise (Unix_error (ENOENT,"read","/FIXMEwrite"))) *)
-    | Fname2((i0_ref,i0),ns) -> (
-      let r = Fs_ops1.read s0 (i0_ref,i0) in
-      put_state r.state2 >>= fun _ -> 
-      let bs' = dest_bytes1 r.ret2 in
-      (* want to create a new array from bs' and bs *)
-      let bs'' = MyDynArray.write bs' ofs bs 0 len in
-      return (Bytes1(bs''))))
-  let (_:rname2 -> int -> file_contents -> int -> ret_value mymonad) = write
-
-  let truncate rpath len = (
+  let mkdir rpath perms = (
+    (* FIXME deal with perms *)
     get_state >>= fun s0 ->
     match rpath with 
-    | None2 _ -> (myraise ENOENT)
-    | Dname2(_,_) -> (myraise EISDIR) (* FIXME check error messages are sensible *)
-    | Fname2((i0_ref,i0),ns) -> (
-      let r = Fs_ops1.read s0 (i0_ref,i0) in
-      let bs = dest_bytes1 r.ret2 in
-      (* create a new array, of length len, with same contents *)
-      let bs' = MyDynArray.resize bs len in
-      let s0 = Fs_ops1.write s0 (i0_ref,i0) bs' in
-      put_state s0))
-  let (_:rname2 -> int -> ret_value mymonad) = truncate
+    | None2(ns) -> (
+      let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns.ns2) in
+      let s0 = Fs_ops1.mkdir s0 (d0_ref,d0) (last ns.ns2) in
+      put_state' s0)
+    | Dname2(_,_) -> (myraise EEXIST)
+    | Fname2(_,_) -> (myraise EEXIST))
 
   let open_create rpath = (
     get_state >>= fun s0 ->
@@ -2257,10 +2275,120 @@ module Fs_ops2 = struct
         (* FIXME assume dir exists; otherwise FIXME we should throw ENOENT *)
         let Some(d0_ref,d0) = resolve_dir_ref s0 dname in
         let s0 = Fs_ops1.touch s0 (d0_ref,d0) fname in
-        put_state s0)
+        put_state' s0)
       | Fname2(_,_) -> (myraise ENOTDIR)
       | _ -> (myraise ENOENT)))
   let (_:rname2 -> ret_value mymonad) = open_create
+
+
+  (* FIXME the real spec would allow reading less than all the bytes *)
+  let read rname2 ofs len = (
+    get_state >>= (fun s0 -> (
+    match rname2 with 
+    | None2 _ -> (myraise ENOENT) (* (raise (Unix_error (ENOENT,"read","/FIXMEread"))) *)
+    | Dname2(_,_) -> (myraise ENOENT) (* (raise (Unix_error (ENOENT,"read","/FIXMEread"))) *)
+    | Fname2((i0_ref,i0),ns) -> (
+      let r = Fs_ops1.read s0 (i0_ref,i0) in (* FIXME Fs_ops1 may have to take an offset too *)
+      (put_state' r) >>= (fun _ -> (
+      let bs = dest_bytes1 r.ret2 in
+      let bs' = MyDynArray.sub bs ofs len in
+      return (Bytes1(bs'))))))))
+  let (_:rname2 -> int -> int -> ret_value mymonad) = read
+
+  (* NB doesn't include . and .. *)
+  let readdir rname2 = (
+    get_state >>= (fun s0 -> (
+    match rname2 with 
+    | None2 _ -> (myraise ENOENT) (* (raise (Unix_error (ENOENT,"readdir","/FIXMEreaddir"))) (* FIXME we may need access to the underlying path that was given by the user *) *)
+    | Fname2 _ -> (myraise ENOTDIR) (* (raise (Unix_error (ENOTDIR,"readdir","/FIXMEreaddir"))) *)
+    | Dname2((d0_ref,d0),ns) -> (
+      let es0 = d0.dentries in
+      let binds = Entries.bindings es0 in
+      return (Names1 (List.map fst binds))))))
+  let (_:rname2 -> ret_value mymonad) = readdir
+  (* NB later we may want to also return a state, given access times can cause changes when reading etc *)
+
+  (* FIXME surely a lot of this complexity is because this is the user land behaviour of the mv command - but we want to target the syscall interface *)
+  (* FIXME we probably want the containing dirs as well, when doing rename; put this in resolve *)
+  (* FIXME rename to subdir of self? *)
+  let rename rsrc rdst = (
+    get_state >>= (fun s0 -> 
+    match rsrc with
+    | None2 _ -> (myraise ENOENT) (* no src file *)
+    | Fname2 ((i0_ref,i0),ns_src) -> (
+      (* file exists *)
+      match rdst with 
+      | None2 ns_dst -> (
+        (* do the move; there is no file ns_dst *)
+        (* FIXME check rename to target where parent doesn't exist *)
+        let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) in
+        match resolve_dir_ref s0 (butlast ns_dst.ns2) with
+        | None -> (myraise ENOENT) (* parent dir of dst doesn't exist *)
+        | Some(d1_ref,d1) -> (
+          put_state' (Fs_ops1.mv s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2))))
+      | Fname2 (_,ns_dst) -> (
+        (* do the move; there is a file name ns_dst *)
+        let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) in
+        let Some(d1_ref,d1) = resolve_dir_ref s0 (butlast ns_dst.ns2) in
+        put_state' (Fs_ops1.mv s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2)))
+        (* FIXME may want to have putstate return a void value *)
+      | Dname2 ((d0_ref,d0),ns_dst) -> (myraise EISDIR)) (* FIXME test this *)
+    | Dname2 (_,ns_src) -> (
+      (* directory exists *)
+      match rdst with
+      | None2 ns_dst -> (
+        (* do the move; there is no file ns_dst *)
+        let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) in
+        match resolve_dir_ref s0 (butlast ns_dst.ns2) with
+        | None -> (myraise ENOENT) (* parent dir of dst doesn't exist *)
+        | Some(d1_ref,d1) -> (
+          put_state' (Fs_ops1.mvdir s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2))))
+      | Fname2 (_,ns_dst) -> (myraise ENOTDIR)
+      | Dname2 (_,ns_dst) -> (
+        (* FIXME check if dir not empty *)
+        if (false) then (myraise ENOTEMPTY) else
+        (* FIXME check if renaming to a subdir *)
+        if (false) then (myraise EINVAL) else
+        (* otherwise target dir is empty; do rename *)
+        let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src.ns2) in
+        let Some(d1_ref,d1) = resolve_dir_ref s0 (butlast ns_dst.ns2) in
+        put_state' (Fs_ops1.mvdir s0 (d0_ref,d0) (last ns_src.ns2) (d1_ref,d1) (last ns_dst.ns2))))))
+  let (_:rname2 -> rname2 -> ret_value mymonad) = rename      
+
+  let rmdir rpath = (
+    get_state >>= fun s0 ->
+    match rpath with 
+    | Dname2(_,ns) -> (
+      (* FIXME for resolving a file, often useful to have dir ref as well *)
+      let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns.ns2) in
+      let s0 = Fs_ops1.unlink s0 (d0_ref,d0) (last ns.ns2) in
+      put_state' s0)
+    | Fname2 _ -> (myraise ENOTDIR)
+    | None2 _ -> (myraise ENOENT))
+
+  let stat rname2 = (
+    get_state >>= (fun s0 -> (
+    let _ = (print_endline ("stat: "^(string_of_rname2 rname2))) in
+    match rname2 with
+    | None2 _ -> (myraise ENOENT)  (* (raise (Unix_error (ENOENT,"stat","/FIXMEstat"))) *)
+    | Fname2((i0_ref,i0),ns) -> (return (Stats1 (default_file_stats s0 (i0_ref,i0))))
+    | Dname2((d0_ref,d0),ns) -> (return (Stats1 (default_dir_stats (d0_ref,d0)))))))
+  let (_:rname2 -> ret_value mymonad) = stat
+
+  let truncate rpath len = (
+    get_state >>= fun s0 ->
+    match rpath with 
+    | None2 _ -> (myraise ENOENT)
+    | Dname2(_,_) -> (myraise EISDIR) (* FIXME check error messages are sensible *)
+    | Fname2((i0_ref,i0),ns) -> (
+      let r = Fs_ops1.read s0 (i0_ref,i0) in
+      let bs = dest_bytes1 r.ret2 in
+      (* create a new array, of length len, with same contents *)
+      let bs' = MyDynArray.resize bs len in
+      let s0 = Fs_ops1.write s0 (i0_ref,i0) bs' in
+      put_state' s0))
+  let (_:rname2 -> int -> ret_value mymonad) = truncate
+
 
   let unlink rpath = (
     get_state >>= fun s0 ->
@@ -2271,41 +2399,24 @@ module Fs_ops2 = struct
       (* FIXME for resolving a file, often useful to have dir ref as well *)
       let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns.ns2) in
       let s0 = Fs_ops1.unlink s0 (d0_ref,d0) (last ns.ns2) in
-      put_state s0))
+      put_state' s0))
 
-  let mkdir rpath perms = (
-    (* FIXME deal with perms *)
-    get_state >>= fun s0 ->
-    match rpath with 
-    | None2(ns) -> (
-      let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns.ns2) in
-      let s0 = Fs_ops1.mkdir s0 (d0_ref,d0) (last ns.ns2) in
-      put_state s0)
-    | Dname2(_,_) -> (myraise EEXIST)
-    | Fname2(_,_) -> (myraise EEXIST))
-
-  let link spath dpath = (
-    get_state >>= fun s0 ->
-    match spath with 
-    | Fname2((i0_ref,i0),ns_src)  -> (
-      match dpath with 
-      | None2 ns_dst -> (
-        let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_dst.ns2) in
-        let s0 = link_file s0 (i0_ref,i0) (d0_ref,d0) (last ns_dst.ns2) in
-        put_state s0)
-      | _ -> (myraise EEXIST))
-    | _ -> (myraise ENOENT))
-
-  let rmdir rpath = (
-    get_state >>= fun s0 ->
-    match rpath with 
-    | Dname2(_,ns) -> (
-      (* FIXME for resolving a file, often useful to have dir ref as well *)
-      let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns.ns2) in
-      let s0 = Fs_ops1.unlink s0 (d0_ref,d0) (last ns.ns2) in
-      put_state s0)
-    | Fname2 _ -> (myraise ENOTDIR)
-    | None2 _ -> (myraise ENOENT))
+  (* FIXME we need to make this take an offset in order to be usable, also read *)
+  (* FIXME the real spec would allow writing less than all the bytes *)
+  let write rname2 ofs bs len = (
+    get_state >>= fun s0 -> 
+    match rname2 with 
+    | None2 _ -> (myraise ENOENT) (* (raise (Unix_error (ENOENT,"read","/FIXMEwrite"))) *)
+    | Dname2(_,_) -> (myraise ENOENT) (* (raise (Unix_error (ENOENT,"read","/FIXMEwrite"))) *)
+    | Fname2((i0_ref,i0),ns) -> (
+      let r = Fs_ops1.read s0 (i0_ref,i0) in
+      let bs' = dest_bytes1 r.ret2 in
+      (* want to create a new array from bs' and bs *)
+      let bs'' = MyDynArray.write (bs,0,len) (bs',ofs) in
+      let r = Fs_ops1.write s0 (i0_ref,i0) bs'' in
+      put_state' r >>= fun _ -> 
+      return (Int1 len)))
+  let (_:rname2 -> int -> file_contents -> int -> ret_value mymonad) = write
 
 
 end
@@ -2421,10 +2532,13 @@ module Transition_system = struct
 
   (* the transition function takes a state, a label, and returns an updated state with a possible value returned, or an error *)
   let trans s0 lbl = (
+    let _ = print_endline (string_of_label lbl) in
     let m = (match lbl with 
       | LINK (s,d) -> (link s d)
       | MKDIR (s,p) -> (mkdir s p)
-      | OPEN (p,fs) -> (_open p fs)
+      | OPEN (p,fs) -> (
+          if (List.mem O_CREAT fs) then (open_create p (* FIXME fs *)) 
+          else (_open p fs))
       | READ (p,i,j) -> (read p i j)
       | READDIR p -> (readdir p)
       | RENAME (s,d) -> (rename s d)
@@ -2442,7 +2556,126 @@ module Transition_system = struct
     (s,v))
   let (_:state -> ty_label -> (state * (error,ret_value)sum)) = trans
   
+  (* convenience method to process a list of labels *)
+
+  let process_labels s0 lbls = (
+    let f1 = (fun xs -> fun lbl -> 
+      let l = last xs in
+      let (_,_,(s,_)) = l in
+      let (s',v) = trans s lbl in
+      xs@[(List.length xs,lbl,(s',v))])
+    in
+    let dummy_lbl = LINK("dummy lbl","dummy lbl") in
+    let dummy_error_or_value = Inr None1 in
+    List.fold_left f1 [(0,dummy_lbl,(s0,dummy_error_or_value))] lbls)
+  let (_:state -> ty_label list -> (int * ty_label * (state * (error,ret_value)sum)) list) = process_labels
+
 end
+
+module Fs_spec_everything = struct
+
+  include Prelude
+  include File_utils
+  include Fs_types
+  include Lift
+  include Common
+  include Fs_ops1
+  include Resolve
+  include Fs_ops2
+  include Fs_ops3
+  include Transition_system
+
+end
+
+@test trans
+
+open Fs_spec_everything
+
+let s0 = state0
+let s = s0
+let lbl = MKDIR("/tmp",0)
+let (s,_) = trans s lbl
+let lbl = MKDIR("/tmp/somedir",0)
+let (s,_) = trans s lbl
+
+
+let _ = string_of_state s
+let _ = Dir_map.bindings s.dirs
+
+let path = process_path s "/tmp/somedir"
+
+let Inr(s,_) = run_mymonad (Fs_ops2.mkdir path 0) s
+let _ = Dir_map.bindings s.dirs 
+
+
+
+let s0 = s
+let rpath = path
+let None2(ns) = rpath
+
+  let mkdir rpath perms = (
+    (* FIXME deal with perms *)
+    get_state >>= fun s0 ->
+    match rpath with 
+    | None2(ns) -> (
+      let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns.ns2) in
+      let s0 = Fs_ops1.mkdir s0 (d0_ref,d0) (last ns.ns2) in
+      put_state s0)
+    | Dname2(_,_) -> (myraise EEXIST)
+    | Fname2(_,_) -> (myraise EEXIST))
+
+let ns = ns.ns2
+
+  let resolve_dir_ref s0 ns = (
+    let ns = process_dot_dotdot ns in
+    (* sofar is the (dir_ref,dir) we currently got to; starts off as the root *)
+    let rec f1 sofar ns = (match ns with 
+      | [] -> (Some sofar)
+      | n::ns -> (
+        (* FIXME following should return None if lookup fails; FIXME option monad would make this more readable *)
+        let m = (snd sofar).dentries in
+        match (Entries.find2 n m) with | None -> None | Some entry -> 
+        match is_dir_ref_entry entry with | false -> None | true ->
+        let dir_ref = dest_dir_ref_entry entry in 
+        let Some(dir) = lookup_dir s0 dir_ref in (* wellformedness, shouldn't fail *)
+        f1 (dir_ref,dir) ns))
+    in
+    f1 (get_root s0) ns)
+  let (_:state -> name list -> (dir_ref * dir) option) = resolve_dir_ref
+
+
+@test write
+
+let s0 = state0
+let s = s0
+let lbl = OPEN("/tmp.txt",[O_CREAT])
+let (s,Inr _) = trans s lbl
+let lbl = WRITE("/tmp.txt",0,MyDynArray.of_string "hello",5)
+let (s,Inr _) = trans s lbl
+let lbl = READ("/tmp.txt",0,5)
+let (s,Inr(Bytes1(bs))) = trans s lbl
+let _ = MyDynArray.to_string bs
+
+
+@test rename
+
+open Fs_spec_everything;;
+
+let s0 = DummyFs.state0
+let s = s0
+let (s,Inr _) = trans s (OPEN("/tom.txt",[O_CREAT]))
+let _ = print_endline (string_of_state s)
+let (s,Inr _) = trans s (RENAME("/tom.txt","/jen.txt"))
+let _ = print_endline (string_of_state s)
+
+let s0 = DummyFs.state0
+let s = s0
+let (s,Inr _) = trans s (OPEN("/tom.txt",[O_CREAT]))
+let _ = print_endline (string_of_state s)
+let r = Fs_ops1.mv s (Dir_ref 0,get_dir s (Dir_ref 0)) "tom.txt" (Dir_ref 0,get_dir s (Dir_ref 0)) "jen.txt"
+let s = r.state2
+let _ = print_endline (string_of_state s)
+
 
 
 @FIXME move? fs_spec.md
@@ -2668,256 +2901,6 @@ let _ = Fs_ops2.stat s0 (Fname2 ns1)
 let _ = Fs_ops2.stat s0 (Fname2 ns2)
 
 
-@FIXME move? myfuse.ml
-
-module FuseIntegration = struct
-  
-  open Unix
-  open LargeFile
-  open Bigarray
-
-  open FsEverything
-
-  open Parse_lib
-  open Everything
-  open Opsparser2
-
-  open Fuse
-
-  (* from Fuse.ml, Fuse.buffer *)
-  type myfusebuffer = (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
-
-  let state0 = ref DummyFs.state0
-
-  let catch_exception s f = (try f () with 
-    | Unix_error _ as e -> (print_endline (s^" Unix_error"); raise e)
-    | Invalid_argument _ as e -> (print_endline (s^" Invalid_argument"); raise e)
-    | e -> (print_endline s; raise e))
-  
-  let do_getattr path = (
-    let name = process_path (!state0) path in
-    Fs_ops2.stat (!state0) name)          
-
-  (* TODO need to fix getattr to return the correct things for files and dirs *)
-  (* TODO add . and .. entries *)
-  let do_readdir path _ = (
-    let rname = process_path (!state0) path in
-    Fs_ops2.readdir (!state0) rname)
-  
-  (* FIXME we have to take care of flags eg O_TRUNC *)
-  (* FIXME return is int option - meaning optional file handle? *)
-  (* FIXME why is this called fopen (taking an fd?) rather than open? *)
-  let do_fopen path flags = (
-    let _ = print_endline ("do_fopen: "^path) in
-    let rname = process_path (!state0) path in 
-    match rname with 
-    | None2 _ -> (raise (Unix_error (ENOENT,"open",path)))
-    | Dname2 _ -> None (* FIXME? can we open a dir? *)
-    | Fname2 ns -> None) 
-  
-  let do_read path buf ofs _ = (
-    let rname = process_path (!state0) path in
-    match (Fs_ops2.read (!state0) rname) with
-    | None -> (raise (Unix_error (ENOENT,"read",path)))
-    | Some bs -> (
-      let ofs = Int64.to_int ofs in
-      let contents = bs in
-      let len = min ((MyDynArray.dim contents) - ofs) (Array1.dim buf) in
-  	  (MyDynArray.blit_array1 (contents,ofs,len) (buf,0);
-  	   len)))
-  let (_:string -> myfusebuffer -> int64 -> 'a -> int) = do_read
-  
-  (* FIXME make debugging configurable - otherwise thisis all very slow! *)
-  let do_write path buf ofs _ = catch_exception ("do_write: exception "^path) (fun () -> (
-    let ofs = Int64.to_int ofs in
-    (*
-    let data = Encode.encode_array buf in
-    let _ = print_endline ("write64 "^path^" "^(string_of_int ofs)^" \""^data^"\"") in
-    *)
-    let rname = process_path (!state0) path in
-    (* FIXME this logic is all wrong - we need to see whether the path resolves first *)
-    match (Fs_ops2.read (!state0) rname) with
-    | None -> (raise (Unix_error (ENOENT,"write",path)))
-    | Some bs -> (
-      (* replace some of the bytes, and write *)
-      let buf = MyDynArray.of_array buf in
-      let len = MyDynArray.dim buf in 
-      let bs = MyDynArray.blit (buf,0,len) (bs,ofs) in (* FIXME note that bs is being used linearly... *)
-      let s0 = Fs_ops2.write (!state0) rname bs in
-      let _ = (state0 := s0) in
-      len)))
-  let (_:string -> myfusebuffer -> int64 -> 'a -> int) = do_write
-    	   
-  let do_truncate path len = (
-    let len = Int64.to_int len in
-    let _ = print_endline ("do_truncate: "^(string_of_int len)) in
-    let s0 = !state0 in
-    let rname2 = process_path s0 path in
-    match rname2 with 
-    | None2 _ -> (raise (Unix_error (ENOENT,"truncate",path)))
-    | Dname2 _ -> (raise (Unix_error (EISDIR,"truncate",path))) (* FIXME check error messages are sensible *)
-    | Fname2 ns -> (
-      let Some(i0_ref,i0) = resolve_inode_ref s0 ns in
-      let Some bs = Fs_ops1.read s0 (i0_ref,i0) in
-      (* create a new string, of length len, with same contents *)
-      let bs' = MyDynArray.resize bs len in
-      let s0 = Fs_ops1.write s0 (i0_ref,i0) bs' in
-      let _ = (state0 := s0) in
-      ()))
-  let (_:string -> int64 -> unit) = do_truncate
-
-  (* "This is called for creation of all non-directory, non-symlink nodes" *)
-  let do_mknod path mode = (
-    let _ = print_endline ("do_mknod: "^path) in
-    let s0 = !state0 in
-    let rname2 = process_path s0 path in
-    match rname2 with 
-    | None2 ns -> (
-      (* FIXME need to look at mode *)
-      let dir_name = process_path s0 ("/" ^ (String.concat "/" (butlast ns))) in
-      match dir_name with
-      | Dname2 ns_dir -> (
-        let _ = print_endline ("do_mknod: touch") in
-        let Some(d0_ref,d0) = resolve_dir_ref s0 ns_dir in
-        let s0 = Fs_ops1.touch s0 (d0_ref,d0) (last ns) in
-        let _ = (state0 := s0) in
-        ())
-      | _ -> (raise (Unix_error (EEXIST,"mknod",path))))
-    | Dname2 _ -> (raise (Unix_error (EEXIST,"mknod",path))) 
-    | Fname2 ns -> (raise (Unix_error (EEXIST,"mknod",path))))
-  let (_:string -> int -> unit) = do_mknod
-
-  let do_unlink path = (
-    let s0 = !state0 in
-    let rname2 = process_path s0 path in 
-    match rname2 with 
-    | Fname2 ns -> (
-      (* FIXME for resolving a file, often useful to have dir ref as well *)
-      let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns) in
-      let s0 = Fs_ops1.unlink s0 (d0_ref,d0) (last ns) in
-      let _ = (state0 := s0) in
-      ())
-    | _ -> (raise (Unix_error (EEXIST,"mknod",path))))
-  let (_:string -> unit) = do_unlink
-
-  (* FIXME all this logic should be in the spec, not in the fuse layer *)
-  (* FIXME rename to subdir of self? *)
-  let do_rename src dst = (
-    let _ = (print_endline ("do_rename "^src^" "^dst)) in
-    let s0 = !state0 in
-    let rsrc = process_path s0 src in 
-    let rdst = process_path s0 dst in 
-    if (is_None2 rsrc) then (raise (Unix_error (ENOENT,"rename",src))) else
-    match rdst with 
-      | None2 ns_dst -> (
-        match rsrc with 
-        | Fname2 ns_src -> (
-          let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src) in
-          let Some(d1_ref,d1) = resolve_dir_ref s0 (butlast ns_dst) in
-          let s0 = Fs_ops1.mv s0 (d0_ref,d0) (last ns_src) (d1_ref,d1) (last ns_dst) in
-          let _ = (state0 := s0) in
-          ())
-        | Dname2 ns_src -> (
-          let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src) in
-          let Some(d1_ref,d1) = resolve_dir_ref s0 (butlast ns_dst) in
-          let s0 = Fs_ops1.mvdir s0 (d0_ref,d0) (last ns_src) (d1_ref,d1) (last ns_dst) in (* FIXME last ns_src may not ref dir *)
-          let _ = (state0 := s0) in
-          ())
-      )
-      | Fname2 ns_dst -> (
-        match rsrc with 
-        | Fname2 ns_src -> (
-          let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src) in
-          let Some(d1_ref,d1) = resolve_dir_ref s0 (butlast ns_dst) in
-          let s0 = Fs_ops1.mv s0 (d0_ref,d0) (last ns_src) (d1_ref,d1) (last ns_dst) in
-          let _ = (state0 := s0) in
-          ())
-        | Dname2 ns_src -> (raise (Unix_error (EISDIR,"rename",dst))))
-      | Dname2 ns_dst -> (
-        match rsrc with 
-        | Fname2 ns_src -> (raise (Unix_error (EISDIR,"rename",dst)))
-        | Dname2 ns_src -> (
-          let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_src) in
-          let Some(d1_ref,d1) = resolve_dir_ref s0 (butlast ns_dst) in
-          let s0 = Fs_ops1.mvdir s0 (d0_ref,d0) (last ns_src) (d1_ref,d1) (last ns_dst) in
-          let _ = (state0 := s0) in
-          ()))
-  )
-  let (_:string -> string -> unit) = do_rename
-
-  let do_mkdir path perms = (
-    (* FIXME deal with perms *)
-    let s0 = !state0 in
-    let rpath = process_path s0 path in 
-    match rpath with 
-    | None2 ns -> (
-      let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns) in
-      let s0 = Fs_ops1.mkdir s0 (d0_ref,d0) (last ns) in
-      let _ = (state0 := s0) in
-      ())
-    | Fname2 ns -> (raise (Unix_error (EEXIST,"mkdir",path)))
-    | Dname2 ns -> (raise (Unix_error (EEXIST,"mkdir",path))))
-  let (_:string -> Unix.file_perm -> unit) = do_mkdir
-
-  let do_link src dst = (
-    let s0 = !state0 in
-    let spath = process_path s0 src in
-    let dpath = process_path s0 dst in
-    match spath with 
-    | Fname2 ns_src  -> (
-      match dpath with 
-      | None2 ns_dst -> (
-        let Some(i0_ref,i0) = resolve_inode_ref s0 ns_src in
-        let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns_dst) in
-        let s0 = link_file s0 (i0_ref,i0) (d0_ref,d0) (last ns_dst) in
-        let _ = (state0 := s0) in
-        ())
-      | _ -> (raise (Unix_error (EEXIST,"link",dst))) (* note, not a file that exists *)
-    )
-    | _ -> (raise (Unix_error (ENOENT,"link",src)))
-  )
-  let (_:string -> string -> unit) = do_link
-
-  let do_rmdir path = (
-    let s0 = !state0 in
-    let rname2 = process_path s0 path in 
-    match rname2 with 
-    | Dname2 ns -> (
-      (* FIXME for resolving a file, often useful to have dir ref as well *)
-      let Some(d0_ref,d0) = resolve_dir_ref s0 (butlast ns) in
-      let s0 = Fs_ops1.unlink s0 (d0_ref,d0) (last ns) in
-      let _ = (state0 := s0) in
-      ())
-    | Fname2 _ -> (raise (Unix_error (ENOTDIR,"rmdir",path)))
-    | None2 _ -> (raise (Unix_error (ENOENT,"rmdir",path))))
-  let (_:string -> unit) = do_unlink
-
-  (* still to do:
-  fsyncdir
-  flush
-  fsync
-  rmdir
-  *)
-
-  let _ =
-    main Sys.argv 
-      { 
-        default_operations with 
-  	      getattr = do_getattr;
-  	      readdir = do_readdir;
-  	      fopen = do_fopen;
-  	      read = do_read;
-          write = do_write;
-          truncate = do_truncate;
-          mknod = do_mknod;
-          unlink = do_unlink;
-          rename = do_rename;
-          mkdir = do_mkdir;
-          link = do_link;   
-          rmdir = do_rmdir;
-      }
-
-end
 
 @test do_readdir
 
