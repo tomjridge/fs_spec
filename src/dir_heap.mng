@@ -1,0 +1,936 @@
+@ignore
+Hi-lock: (("^@.*" (0 (quote hi-blue-b) t)))
+Hi-lock: (("^#+.*" (0 (quote hi-green-b) t)))
+
+# Interactive top-level directives
+
+Via findlib:
+
+    #use "topfind";;
+    #require "unix";;
+    #require "bigarray";;
+    #require "str";;
+    (* #cd "/tmp/l/general/research/fs/fs_spec/src";; *)
+    #use "fs_prelude.toplevel.ml";;
+    #use "fs_spec.toplevel.ml";;
+    #use "dir_heap.toplevel.ml";;
+
+
+@dir_heap.md
+# `dir_heap.ml`
+## `Dir_heap_types1` and basic operations
+
+Types for a representation using an inode heap and a dir heap
+
+@dir_heap.ml
+
+open Fs_prelude
+open Fs_spec
+
+module Dir_heap_types = struct
+
+  open Prelude
+  open Fs_types1 (* FIXME remove dependence? have a core types and a state types? *)
+
+  type dir_ref = Dir_ref of int
+
+  let dest_dir_ref s0 (Dir_ref i) = i
+
+
+  (* a reference to a map of entries *)
+  (*
+  type entries_ref = Entries_ref of int
+
+  let dest_entries_ref (Entries_ref i) = i
+  *)
+
+  type inode_ref = Inode_ref of int
+
+  let dest_inode_ref s0 (Inode_ref i) = i
+
+  (*
+  type file_contents_ref = File_contents_ref of int
+
+  let dest_file_contents_ref (File_contents_ref i) = i
+  *)
+
+  (* directories *)
+  type entry = (dir_ref,inode_ref) sum
+  let is_dir_ref_entry = is_Inl
+  let is_inode_ref_entry = is_Inr
+  let dest_dir_ref_entry = dest_Inl
+  let dest_inode_ref_entry = dest_Inr
+
+  module Entries = MyMap(
+    struct 
+      type key = name
+      type value = entry option
+      let compare = Pervasives.compare
+      let default = None
+      let is_default = (fun x -> x=None)
+    end)
+
+  type entries = Entries.ty_map (* FIXME in spec? *)
+
+  type dir = {
+    dentries:entries
+  }
+
+  type inode = {
+    fcontents:file_contents;
+    is_symlink:bool
+  }
+
+  (* state type *)
+
+  module Dir_map = MyMap(
+    struct 
+      type key = dir_ref
+      type value = dir option
+      let compare = Pervasives.compare
+      let default = None
+      let is_default = (fun x -> x=None)
+    end)
+
+  module Inode_map = MyMap(
+    struct
+      type key = inode_ref
+      type value = inode option
+      let compare = Pervasives.compare
+      let default = None
+      let is_default = (fun x -> x=None)
+    end)
+
+  type state = {
+    dirs:Dir_map.ty_map;
+    (* entries:Entries_map.ty_map; *)
+    inodes:Inode_map.ty_map;
+    (* contents:Contents_map.ty_map *)
+  }
+
+  let state0' = {
+    dirs=Dir_map.empty;
+    inodes=Inode_map.empty;
+    (* entries=Entries_map.empty;
+    contents=Contents_map.empty *)
+  }  
+
+  let get_root s0 = (Dir_ref 0)
+
+  (* lift find2 *)
+  let lookup_dir s k = Dir_map.find2 k s.dirs
+  let (_:state -> dir_ref -> dir option) = lookup_dir
+
+  let lookup_inode s k = Inode_map.find2 k s.inodes
+  let (_:state -> inode_ref -> inode option) = lookup_inode
+
+
+  (* FIXME may prefer a version that returns a (ref,obj) option ; see eg mvdir *)
+  let resolve1 s0 d0_ref name = (
+    let Some(d0) = lookup_dir s0 d0_ref in
+    let m = d0.dentries in
+    Entries.find2 name m)
+  let (_:state -> dir_ref -> name -> entry option) = resolve1
+
+  (* these update the actual maps *)
+
+  let update_dirs s k v = {s with dirs=(Dir_map.add k v s.dirs) }
+  let (_:state -> dir_ref -> dir option -> state) = update_dirs
+    
+  (*
+  let update_entries s k v = {s with entries=(Entries_map.add k v s.entries) }
+  let (_:state -> entries_ref -> Entries.ty_map option -> state) = update_entries
+  *)
+
+  let update_inodes s k v = {s with inodes=(Inode_map.add k v s.inodes) }
+  let (_:state -> inode_ref -> inode option -> state) = update_inodes
+
+  (*
+  let update_contents s k v = {s with contents=(Contents_map.add k v s.contents) }
+  let (_:state -> file_contents_ref -> bytes option -> state) = update_contents
+  *)
+
+  (* common case is to update with Some *)
+  let update_drs_some s (k,v) = (update_dirs s k (Some v))
+  let update_inds_some s (k,v) = (update_inodes s k (Some v))
+  (*
+  let update_ents_some s (k,v) = (update_entries s k (Some v))
+  let update_cnts_some s (k,v) = (update_contents s k (Some v))
+  *)
+  
+
+  (*
+  let lookup_entries s k = Entries_map.find2 k s.entries
+  let (_:state -> entries_ref -> Entries.ty_map option) = lookup_entries
+  *)
+
+  (* these add entries to the maps *)
+  
+  (* r is an entries_ref *)
+  let update_ents_pointwise s d0_ref k v = (
+    let Some(d0) = lookup_dir s d0_ref in
+    let m = d0.dentries in
+    let m' = Entries.add k v m in
+    let s' = update_drs_some s (d0_ref,{d0 with dentries=m'}) in
+    s')
+  let (_:state -> dir_ref -> name -> entry option -> state) = update_ents_pointwise
+  
+
+  (* FIXME want to use new_dir, not this *)
+  let _FIXME_new_dir_ref s = (
+    let binds = Dir_map.bindings s.dirs in
+    let binds = List.map (fun (k,v) -> dest_dir_ref s k) binds in
+    let max = List.fold_left (fun m -> fun r -> max m r) 0 binds in
+    Dir_ref(max+1))
+ 
+  let new_dir s0 = (
+    let d0_ref = _FIXME_new_dir_ref s0 in
+    let d0 = { dentries = Entries.empty } in
+    let s0 = update_drs_some s0 (d0_ref,d0) in
+    (s0,(d0_ref,d0)))
+
+  let _FIXME_new_inode_ref s = (
+    let binds = Inode_map.bindings s.inodes in
+    let binds = List.map (fun (k,v) -> dest_inode_ref s k) binds in
+    let max = List.fold_left (fun m -> fun r -> max m r) 0 binds in
+    Inode_ref(max+1))
+
+  let new_inode s0 = (
+    let i0_ref = _FIXME_new_inode_ref s0 in
+    let i0 = { fcontents=(MyDynArray.create ()); is_symlink=false } in
+    let s0 = update_inds_some s0 (i0_ref,i0) in
+    (s0,(i0_ref,i0)))
+
+  let state0 = (
+    (* an initial state with a root dir *)
+    let root = (Dir_ref 0, { dentries=Entries.empty }) in
+    let s0 = update_drs_some state0' root in
+    s0)  
+
+
+end
+
+@dir_heap.md
+## `Fs_ops1`
+
+Implement the basic file system operations
+
+List of all operations involved in dependencies:
+
+  * creation of a `dir_ref` can be dependent on creation of a new entries (eg `mkdir`)
+  * `update_ents_pointwise` (`internal_link_dir` or `internal_link_file`) can be dependent on creation of a new `dir_ref` (and writing of that `dir_ref` into `s0.dirs`) (eg `mkdir`)
+  * `internal_link_dir` can be dependent on `update_ents_pointwise` (eg `mkdir`)
+  * creation of a new `inode_ref` can be dependent on creation of a new `file_contents` (eg touch)
+
+@dir_heap.ml
+
+(* FIXME tidy this up *)
+(*
+module X = struct
+
+  open Fs_types1
+  
+  (* hack to get an abstract state type *)
+  module Y : sig 
+    type t1
+    type t2
+    type t3
+    type t4
+    type t5
+  end = struct 
+    type t1 = int
+    type t2 = int
+    type t3 = int
+    type t4 = int
+    type t5 = int
+  end 
+
+end
+*)
+
+module Fs_ops1 = struct
+
+  open Prelude
+  open Fs_types1
+
+  (* for the purposes of type-checking the following defns without spurious type vars *)
+  module X1 = struct
+    type ty_ops' = (X.Y.t1,X.Y.t2,X.Y.t3,X.Y.t4,X.Y.t5) ty_state_ops
+    type dir_ref' = X.Y.t1
+    type ty_impl' = X.Y.t5
+    type inode_ref' = X.Y.t3
+    type ty_return' = X.Y.t5 ty_return2
+  end
+  open X1
+
+  let dest_dir_ref_entry = dest_Inl
+  let dest_inode_ref_entry = dest_Inr
+
+
+(*
+  let update_ents_pointwise = Lift.update_ents_pointwise
+
+  let state0 = (
+    (* an initial state with a root dir *)
+    let root = (Dir_ref 0, { dentries=Entries.empty }) in
+    let s0 = Lift.update_drs_some state0 root in
+    s0)  
+
+  let get_dir s0 d0_ref = (
+    let Some(d0) = Lift.lookup_dir s0 d0_ref in
+    d0)
+
+  let get_inode s0 i0_ref = (
+    let Some(i0) = Lift.lookup_inode s0 i0_ref in
+    i0)
+
+  (*
+  let get_entries s0 es0_ref = (
+    let Some(es0) = lookup_entries s0 es0_ref in
+    es0)
+  *)
+
+  let get_root s0 = (
+    let Some(d) = Lift.lookup_dir s0 (Dir_ref 0) in
+    (Dir_ref 0, d))
+*)
+
+
+
+@dep.md
+### `internal_link_dir`
+
+|-|-|
+|Name        |`internal_link_dir`                          |
+|Type        |Auxiliary (not available to users)  |
+|Description |Link directory d1 into d0 under name|
+
+Dependencies:
+
+  * Before the on-disk change to `d0.entries`, `d1` must be on-disk at `d1_ref`. By extension, `d1.dentries` must point to a valid entries block, but this need not be synced (up to date). 
+
+  * `d0` need not even be on disk. But then if we ever write the newest version of `d0.entries` to disk, which contains `d1_ref`, clearly `d1_ref` needs to be on disk. So for the updated version of `d0.entries`, there is a dependency to `d1_ref`. Clearly future changes to `d1` must be picked up via `d1_ref`. But we do not need to have a dependency to the latest version of `d1_ref` (but in fact, `d1_ref` isn't versioned? it is supposed to represent a persistent reference to a directory; it must exist, but needn't be the latest version of that directory?)
+
+In general, what things are versioned? Not `d_ref`. But directories (which can change attributes etc, not modelled here) and directory entries in particular, and file contents. And inodes (which can change attribtes etc, not modelled here) but not `inode_ref`. 
+
+  * `d1_ref` must exist, and be valid (reference a valid directory)
+  * `d1` should be the in-mem version current at the time the `internal_link_dir` call was made (or any later version?). On-disk, `d1` may be some way behind when the link is written. Or maybe not? Suppose we make changes to `d1`, then link into `d0`. Suppose `d0` gets updated on disk; does it have to point to an updated `d1`? Or can it point to an older version of `d1`? Probably it can point to an older version of `d1` (the model is that `d1` had operations pending on it, but `d0` was updated to point to `d1`).
+  * `d0.entries` gets a new version. On-disk, `d0.entries` may lag.
+
+Pending ops:
+
+  * `d0.entries` can have a pending op to add an entry
+
+Atomicity: should be a single atomic action
+
+@dir_heap.ml
+
+  (* link directory d1 into d0 under name *)
+  let internal_link_dir ops s0 d0_ref d1_ref name = (
+    let s0 = ops.update_ents_pointwise s0 d0_ref name (Some(Inl(d1_ref))) in
+    s0)
+  let (_:ty_ops' -> ty_impl' -> dir_ref' -> dir_ref' -> name -> ty_impl') = internal_link_dir
+
+  let internal_unlink ops s0 d0_ref name = (
+    let s0 = ops.update_ents_pointwise s0 d0_ref name None in
+    s0)
+  let (_:ty_ops' -> ty_impl' -> dir_ref' -> name -> ty_impl') = internal_unlink
+
+
+@dep.md
+### `internal_link_file`
+
+|-|-|
+|Name    |`internal_link_file`                       |
+|Type    |Auxiliary (not available to users) FIXME it is in some form|
+|Description|Link file i1 into d0 under name   |
+
+Dependencies: 
+
+  * Before the on-disk change to `d0.entries`, `i1` must be on-disk at `i1_ref`. By extension, whatever contents `i1` points to must be valid on disk, but need not be synced.
+
+  * As `internal_link_dir`, `i0` need not be on disk.
+
+Pending ops:
+
+  * `d0.entries` as `internal_link_dir`
+
+Atomicity: single atomic op
+
+@dir_heap.ml
+
+  let internal_link_file ops s0 i1_ref d0_ref name = (
+    let s0 = ops.update_ents_pointwise s0 d0_ref name (Some(Inr(i1_ref))) in
+    s0)
+  let (_:ty_ops' -> ty_impl' -> inode_ref' -> dir_ref' -> name -> ty_impl') = internal_link_file
+
+
+@dep.md
+### `link_file`
+
+|-|-|
+|Name    |`link_file`                       |
+|Type    |User function|
+|Description|Link file i1 into d0 under name   |
+
+Dependencies: 
+
+Pending ops:
+
+Atomicity: single atomic op
+
+@dir_heap.ml
+
+  let link_file ops s0 i1_ref d0_ref name = (
+    let s0 = internal_link_file ops s0 i1_ref d0_ref name in
+    return s0)
+  let (_:ty_ops' -> ty_impl' -> inode_ref' -> dir_ref' -> name -> ty_return') = link_file
+
+@dep.md
+### `unlink`
+
+|-|-|
+|Name    |`unlink`                       |
+|Type    |User function|
+|Function|Remove entry `name` from `d0`|
+
+Dependencies:
+
+  * Do we require `d0_ref` and `d0` to be synced, or even on-disk? No. We are just creating a new version of `d0.entries`, which can be synced later.
+
+Pending ops:
+ 
+  * `d0.entries` as `internal_link_dir`
+
+Atomicity: single atomic op
+
+@dir_heap.ml
+
+  let unlink ops s0 d0_ref name = (
+    let s0 = ops.update_ents_pointwise s0 d0_ref name None in
+    return s0)
+  let (_:ty_ops' -> ty_impl' -> dir_ref' -> name -> ty_return') = unlink
+
+@dep.md
+### `mkdir`
+
+|-|-|
+|Name    |`mkdir`                       |
+|Type    |User function|
+|Function|Create a new directory under `name` in `d0`|
+
+Dependencies:
+
+  * the new dir `d` depends on the new entries `d_entries`
+  * the updated version of `d0` depends on `d`
+
+Pending ops:
+
+  * the state: create a new entry
+  * the state: create a new dir
+  * as `internal_link_dir`
+
+So the modification of `d0.entries` has dependency on create-a-new-dir, which has a dependency on create-a-new-entry
+
+Atomicity: single atomic op
+
+@dir_heap.ml
+
+  (* FIXME assumes name doesn't exist *)
+
+  let mkdir ops s0 d0_ref name = (
+    let (s0,(d1_ref,d1)) = ops.new_dir s0 d0_ref name in
+    (* link d1 into d0 *)
+    let s0 = internal_link_dir ops s0 d0_ref d1_ref name in (* FIXME no d1, so d1_ref must already be present after new_dir *)
+    return s0)
+  let (_:ty_ops' -> ty_impl' -> dir_ref' -> name -> ty_return') = mkdir
+
+@dep.md
+### `mv`
+
+|-|-|
+|Name    |`mv`                       |
+|Type    |User function|
+|Function|Move file `d0/name0` to `d1/name1` |
+
+Dependencies:
+
+  * the `rm` depends on the `internal_link_file`: the file must be linked in before the old ref is removed
+
+Pending ops:
+
+  * `d1.dentries`: the newly linked in file
+  * `d0.dentries`: the removal of the old file
+
+Atomicity: 
+  
+  * on non-journalled filesystems, this is likely two atomic ops: the link into `d1` and the removal from `d0`; this may (?) produce a file that is linked to multiple times
+
+  * on journalled filesystems, this is supposed to be atomic
+
+@dir_heap.ml
+
+  (* FIXME shouldn't this allow the name to be changed? similarly mvdir *)
+  (* FIXME this should not allow the same file to be moved to itself - the following code deletes the file! also mvdir *)
+  (* FIXME mv -T a.txt d fails if d is a dir, with mv: cannot overwrite directory d with non-directory... even if d is non-empty; but this happens in the user level mv, so may be allowed at syscall? *)
+
+  let mv ops s0 d0_ref name0 d1_ref name1 = (
+    let Some(entry) = ops.resolve1 s0 d0_ref name0 in
+    let i0_ref = dest_inode_ref_entry entry in
+    let s0 = internal_link_file ops s0 i0_ref d1_ref name1 in
+    let s0 = internal_unlink ops s0 d0_ref name0 in 
+    return s0)
+  let (_:ty_ops' -> ty_impl' -> dir_ref' -> name -> dir_ref' -> name -> ty_return') = mv
+
+
+@test mv
+
+let s0 = DummyFs.state0
+let s = s0
+let (s,Inr _) = trans s (OPEN("/tom.txt",[O_CREAT]))
+let _ = print_endline (string_of_state s)
+let r = Fs_ops1.mv s (Dir_ref 0,get_dir s (Dir_ref 0)) "tom.txt" (Dir_ref 0,get_dir s (Dir_ref 0)) "jen.txt"
+let s = r.state2
+let _ = print_endline (string_of_state s)
+
+let s0 = DummyFs.state0
+let s = s0
+let (s,Inr _) = trans s (OPEN("/tom.txt",[O_CREAT]))
+let _ = print_endline (string_of_state s)
+let s0 = s
+let (d0_ref,d0) = (Dir_ref 0,get_dir s0 (Dir_ref 0)) 
+let (d1_ref,d1) = (Dir_ref 0,get_dir s0 (Dir_ref 0)) 
+let name0 = "tom.txt"
+let name1 = "jen.txt"
+
+  let mv s0 (d0_ref,d0) name0 (d1_ref,d1) name1 = (
+    let Some(entry) = resolve1 s0 (d0_ref,d0) name0 in
+    let inode_ref = dest_inode_ref_entry entry in
+    let inode = get_inode s0 inode_ref in
+    let s0 = internal_link_file s0 (inode_ref,inode) (d1_ref,d1) name1 in
+    (* FIXME bug: if d0_ref and d1_ref are the same, but we have changed d1 but reuse old d0; FIXME check we haven't made the same mistake elsewhere *)
+    let d0 = get_dir s0 d0_ref in
+    let s0 = internal_unlink s0 (d0_ref,d0) name0 in 
+    return s0)
+  let (_:state -> (dir_ref'*dir) -> name -> (dir_ref'*dir) -> name -> ty_return') = mv
+
+let _ = print_endline (string_of_state s0)
+
+@dep.md
+### `mvdir`
+
+|-|-|
+|Name    |`mvdir`                       |
+|Type    |User function|
+|Function|Move dir `d0/name0` to `d1/name1` |
+
+Dependencies:
+
+  * the `rmdir` depends on the `internal_link_dir`: the directory must be linked in before the old ref is removed
+
+Pending ops:
+
+  * `d1.dentries`: the newly linked in directory
+  * `d0.dentries`: the removal of the old directory
+
+Atomicity: 
+  
+  * on non-journalled filesystems, this is likely two atomic ops: the link into `d1` and the removal from `d0`; this may (?) produce a directory that is linked to multiple times (possibly allowing a bug: if one link is removed, and the space for the dir reclaimed, the other link may give a dangling pointer)
+
+  * on journalled filesystems, this is supposed to be atomic
+
+FIXME should not be able to mv b b/c (move a dir to a subdir) - how is this check implemented in linux?
+
+@dir_heap.ml
+
+  (* FIXME change rm and mvdir linkdir to work with files or dirs *)
+  (* cannot mvdir a b.txt; cannot mvdir a b if b is not empty *)
+  (* FIXME name0 maynot be dir, may not exist FIXME check all uses of dest_dir_ref_entry *)
+  (* note doesn't check status of name1 - just does the link *)
+  let mvdir ops s0 d0_ref name0 d1_ref name1 = (
+    let Some(entry) = ops.resolve1 s0 d0_ref name0 in
+    let d2_ref = dest_dir_ref_entry entry in
+    let s0 = internal_link_dir ops s0 d1_ref d2_ref name1 in
+    let s0 = internal_unlink ops s0 d0_ref name0 in 
+    return s0)
+  let (_:ty_ops' -> ty_impl' -> dir_ref' -> name -> dir_ref' -> name -> ty_return') = mvdir
+
+
+@dep.md
+### `read`
+
+|-|-|
+|Name    |`read`                       |
+|Type    |User function|
+|Function|Read a string from file|
+
+Dependencies:
+
+
+Pending ops:
+
+Atomicity: 
+
+@dir_heap.ml
+
+  (* FIXME obviously we need to support writing at points in the file etc *)
+
+  (* FIXME read should not return an option - there is always some data by wellformedness *)
+  (*
+  let read s0 c_ref = (Contents_map.find2 c_ref s0.contents)
+  let (_:ty_impl' -> file_contents_ref -> bytes option) = read
+
+  let read_all s0 (i0_ref,i) = (
+    let c_ref = i.fcontents in
+    let bs = read s0 c_ref in (* FIXME wellformedness? *)
+    bs)
+  let (_:state -> (inode_ref' * inode) -> bytes option) = read_all  
+  *)
+
+  (* FIXME we assume that the bytes are in the map for valid i, don't need option *)
+  let read ops s0 i0_ref = (
+    let Some(i0) = ops.lookup_inode s0 i0_ref in
+    let bytes = ops.get_contents i0 in
+    {state2=s0; ret2=(Bytes1 bytes)})
+  let (_:ty_ops' -> ty_impl' -> inode_ref' -> ty_return') = read
+
+@dep.md
+### `readdir`
+
+|-|-|
+|Name    |`readdir`                       |
+|Type    |User function|
+|Function|Read contents of a dir|
+
+@dir_heap.ml
+
+  let readdir ops s0 d0_ref = (
+    let Some(d0) = ops.lookup_dir s0 d0_ref in
+    let names = ops.get_entries d0 in
+    let names = List.sort Pervasives.compare names in
+    {state2=s0; ret2=(Names1 names)})
+  let (_:ty_ops' -> ty_impl' -> dir_ref' -> ty_return') = readdir
+
+
+@dep.md
+### `rm`
+
+|-|-|
+|Name    |`rm`|
+|Type    |User function|
+|Function|As `unlink`|
+
+@dir_heap.ml
+
+  let rm ops s0 d0_ref name = (unlink ops s0 d0_ref name)
+  let (_:ty_ops' -> ty_impl' -> dir_ref' -> name -> ty_return') = rm
+
+@dep.md
+### `rmdir`
+
+|-|-|
+|Name    |`rmdir`                       |
+|Type    |User function|
+|Function|Remove a directory `name` in `d0`|
+
+See `unlink`
+
+@dir_heap.ml
+
+  (* also works for files *)
+  let rmdir ops s0 d0_ref name = (unlink ops s0 d0_ref name)
+  let (_:ty_ops' -> ty_impl' -> dir_ref' -> name -> ty_return') = rmdir
+
+
+@dep.md
+### `touch`
+
+|-|-|
+|Name    |`touch`                       |
+|Type    |User function|
+|Function|Add a file `name` in `d0`|
+
+Dependencies:
+
+  * the new `d0.entries` depends on the creation of the new inode
+
+Pending ops:
+
+  * the state: the creation of the new inode
+  * `d0.entries`: modification, depends on creation of new inode
+
+Atomicity: single atomic op ; the creation of the new inode might conceivably be separate from the link (eg resource exhaustion observed from another thread after inode allocated, but before file linked in - probably a very rarely observed event! also, we probably are quite loose on resource exhaustion, so this observed sequence could be explained by some other behaviour eg file allocated and deleted, but space not reclaimed)
+ 
+@dir_heap.ml
+
+  (* FIXME assumes name doesn't exist; otherwise leave as is FIXME at moment it overwrites *)
+
+  let touch ops s0 d0_ref name = (
+    let (s0,(i0_ref,i0)) = ops.new_inode s0 in 
+    let s0 = internal_link_file ops s0 i0_ref d0_ref name in (* i0 must be in s0 already *)
+    return s0)
+  let (_:ty_ops' -> ty_impl' -> dir_ref' -> name -> ty_return') = touch
+
+@dep.md
+### `write`
+
+|-|-|
+|Name    |`write`                       |
+|Type    |User function|
+|Function|Write string `s` to file `i`|
+
+Dependencies:
+
+  * in the no-crash scenario, two non-overlapping writes to a file can be reordered, giving the same result; in the crash scenario, it is just about possible that applications depend on the order of writes being maintained (but presumably this is highly unlikely, since POSIX is presumably quiet on the matter)
+
+
+Pending ops:
+
+Atomicity: 
+
+@dir_heap.ml
+
+  (* FIXME obviously we need to support writing at points in the file etc *)
+  let write ops s0 i0_ref c = (
+    let Some(i0) = ops.lookup_inode s0 i0_ref in
+    let i0 = ops.set_contents i0 c in
+    let s0 = ops.update_inds_some s0 (i0_ref,i0) in
+    return s0)
+  let (_:ty_ops' -> ty_impl' -> inode_ref' -> bytes -> ty_return') = write
+
+@dep.md
+### `set_symlink`
+
+This is an ad hoc method to update the symlink flag on an inode
+
+@dir_heap.ml
+
+  let set_symlink ops s0 i0_ref f = (
+    let Some(i0) = ops.lookup_inode s0 i0_ref in
+    let i0 = ops.set_symlink i0 f in
+    let s0 = ops.update_inds_some s0 (i0_ref,i0) in
+    return s0)
+  let (_:ty_ops' -> ty_impl' -> inode_ref' -> bool -> ty_return') = set_symlink
+
+@FIXME dep.md
+### `cp` (FIXME cp and cpdir have not been altered to take ty_return')
+
+|-|-|
+|Name    |`cp`                       |
+|Type    |User function|
+|Function|Copy file `i0` to `d1/name1`|
+
+Dependencies:
+
+  * the `internal_link_file` depends on `clone_inode`
+  * the `clone_inode` depends on allocating a new inode
+  * (with proper inodes) allocating a new inode depends on allocating contents
+
+Pending ops:
+
+  * `d1.dentries`: the newly linked in copy of the file
+
+Atomicity: a single atomic op
+
+@FIXME fs_spec.ml
+
+  (* this is the spec level, so we have no notion that entries are cow; where does this come in? in the impl, we implement cpdir differently, but force that changes to entries result in a cow entries *)
+  (* copy d0 to d1 under name; create new dir, pointing to new entries; in the impl we do something special *)
+  (* similarly when copying a file, we do something special;  *)
+  (* the fact that dentries_ref and content_ref are not user visible is the key to doing clever optimizations such as cow; the interface to the spec must be independent of dentries_ref and content_ref *)
+  (* we are allowing update in place for dentries and file cotents, at the spec level *)
+  (* probably cpdir is a user-level application, which is optimized by the impl, via special user-level ops provided by the kernel - and this ties in with the gnu cp code, which is special cased for cow systems? *)
+
+  (* copy, make changes to s0, and return new *)
+  let clone_inode s0 (i0_ref,i0) = (
+    let clone_inode = fun i -> i in 
+    let i1 = clone_inode i0 in
+    let i1_ref = new_inode_ref s0 in
+    let s0 = update_inodes s0 i1_ref (Some i1) in
+    (s0,(i1_ref,i1)))
+
+  (* copy a file name0 in d0 as name1 in d1 *)
+  (* FIXME at the moment this copy is like making a link on the contents of the file *)
+  let cp s0 (i0_ref,i0) (d1_ref,d1) name1 = (
+    let (s0,(i1_ref,i1)) = clone_inode s0 (i0_ref,i0) in
+    let s0 = internal_link_file s0 (i1_ref,i1) (d1_ref,d1) name1 in
+    s0)
+  let (_:ty_impl' -> (inode_ref' * inode) -> (dir_ref' * dir) -> name -> ty_impl') = cp
+  
+  (* these are the "specifications" of the cp commands, which we optimize in the impl via cow *)
+
+@FIXME dep.md
+### `cpdir`
+
+|-|-|
+|Name    |`cpdir` aka `snapshot`|
+|Type    |User function, special filesystems only|
+|Function|Copy dir `d0` to `d1/name1`|
+
+Note: of course, `cp -R` is a userland operation; this is a different operation, supplied by some COW filesystems as "snapshot"; this operation attempts to model special filesystems that atomically either copy the whole directory or not (even at the on-disk level)
+
+Dependencies:
+
+  * the `internal_link_dir` depends on all the actions in `clone_dir`; within `clone_dir`, we don't have to track dependencies, since they are not visible until the directory is linked in (what about new allocations?)
+
+Pending ops:
+
+  * `d1.dentries`: the newly linked in copy of the directory
+
+Atomicity: a single atomic op? if we dereference the entire directory at a single point in time, this may cause other operations to queue; so it might be better to do this in stages; but really this is a spec of a complex op for a cow filesystem where cpdir is supposed to appear atomic; likely we can't implement this easily without blocking other ops
+
+@FIXME fs_spec.ml
+    
+  (* produce a clone of d0, present in s0 *)
+  let rec clone_dir s0 (d0_ref,d0) = (
+    let eref0 = d0.dentries in
+    let es0 = get_entries s0 eref0 in
+    let (s0,(eref1,es1)) = clone_entries s0 (eref0,es0) in
+    let d1_ref = new_dir_ref s0 in
+    let d1 = { dentries=eref1 } in
+    let s0 = update_dirs s0 d1_ref (Some d1) in
+    (s0,(d1_ref,d1)))
+  and clone_entries s0 (ref0,es0) = (
+    let es1 = Entries.empty in
+    let ref1 = new_entries_ref s0 in
+    let s0 = update_entries s0 ref1 (Some es1) in
+    let binds = Entries.bindings es0 in
+    let f1 s0 (name,Some v) = (
+      if (is_dir_ref_entry v) then 
+        let ref = dest_dir_ref_entry v in
+        let (s0,(ref',d')) = clone_dir s0 (ref,get_dir s0 ref) in
+        let s0 = update_ents_pointwise s0 ref1 name (Some(Inl(ref'))) in
+        s0
+      else
+        let ref = dest_inode_ref_entry v in
+        let (s0,(ref',f')) = clone_inode s0 (ref,get_inode s0 ref) in
+        let s0 = update_ents_pointwise s0 ref1 name (Some(Inr(ref'))) in
+        s0)
+    in
+    let s0 = List.fold_left f1 s0 binds in
+    (s0,(ref1,es1)))
+  let (_:ty_impl' -> (dir_ref' * dir) -> (ty_impl' * (dir_ref' * dir))) = clone_dir
+  let (_:ty_impl' -> (entries_ref * Entries.ty_map) -> (ty_impl' * (entries_ref * Entries.ty_map))) = clone_entries
+      
+  let cpdir s0 (d0_ref,d0) (d1_ref,d1) name1 = (
+    let (s0,(d_ref,d)) = clone_dir s0 (d0_ref,d0) in
+    let s0 = internal_link_dir s0 (d1_ref,d1) (d_ref,d) name1 in
+    s0)
+  let (_:ty_impl' -> (dir_ref' * dir) -> (dir_ref' * dir) -> name -> ty_impl') = cpdir
+
+@dir_heap.ml
+
+end
+
+
+
+
+
+
+@dir_heap.md
+## Dir heap ops
+@dir_heap.ml
+
+(* show that dir heap implements the general notion of state *)
+module Dir_heap_ops = struct
+
+  open Fs_types1
+  open Dir_heap_types
+  open Fs_ops1
+
+  let ops = {
+    get_init_state=(fun () -> state0);
+    get_root=(fun s0 -> Some (get_root s0));
+    lookup_dir=lookup_dir;
+    lookup_inode=lookup_inode;
+    update_inds_some=update_inds_some;
+    resolve1=resolve1;
+    update_ents_pointwise=update_ents_pointwise;
+    new_dir=(fun s0 _d0_ref _name -> new_dir s0);
+    new_inode=new_inode;
+    get_contents=(fun i0 -> i0.fcontents);
+    set_contents=(fun i0 -> fun c -> { i0 with fcontents=c });
+    get_symlink=(fun i0 -> i0.is_symlink);
+    set_symlink=(fun i0 -> fun b -> { i0 with is_symlink=b });
+    dest_dir_ref=dest_dir_ref;
+    dest_inode_ref=dest_inode_ref;
+    get_entries=(fun d0 -> 
+      let es0 = d0.dentries in
+      let binds = Entries.bindings es0 in
+      (List.map fst binds))
+  }
+
+  let ops1 = {
+    get_init_state1=(fun () -> state0);
+    get_root1=(fun s0 -> Some (get_root s0));
+    dest_dir_ref1=dest_dir_ref;
+    dest_inode_ref1=dest_inode_ref;
+    get_symlink1=(fun s0 -> fun i0_ref -> 
+      let Some(i0) = ops.lookup_inode s0 i0_ref in
+      i0.is_symlink);
+    link_file1=(link_file ops);
+    unlink1=(unlink ops);
+    mkdir1=(mkdir ops);
+    mv1=(mv ops);
+    mvdir1=(mvdir ops);
+    read1=(read ops);
+    readdir1=(readdir ops);
+    resolve11=(ops.resolve1);
+    rm1=(rm ops);
+    rmdir1=(rmdir ops);
+    touch1=(touch ops);
+    write1=(write ops);
+    set_symlink1=(set_symlink ops);
+  }
+
+end
+
+@test
+
+(* FIXME might be nice to have an operation of merging, given two states, and join one root as a dir in the other state *)
+
+open Prelude
+open Fs_types1
+open Lift
+open Common
+
+let root_entries = (Entries_ref 0,Entries.empty)
+let root = (Dir_ref 0, { dentries=(Entries_ref 0) })
+
+let tmp_entries = (Entries_ref 1,Entries.empty)
+let tmp = (Dir_ref 1, { dentries=(Entries_ref 1) })
+
+let tmptxt = (Inode_ref 0, {dummy=()} )
+
+let atxt = (Inode_ref 1, {dummy=()} )
+
+let s0 = state0
+(* root directory *)
+let s0 = update_dirs s0 (fst root) (Some(snd root))
+let s0 = update_entries s0 (fst root_entries) (Some(snd root_entries))
+(* tmp directory *)
+let s0 = update_dirs s0 (fst tmp) (Some(snd tmp))
+let s0 = update_entries s0 (fst tmp_entries) (Some(snd tmp_entries))
+(* link tmp dir at /tmp *)
+let s0 = update_ents_pointwise s0 (fst root_entries) "tmp" (Some(Inl(fst tmp)))
+(* add and link tmp.txt at /tmp.txt *)
+let s0 = update_inodes s0 (fst tmptxt) (Some(snd tmptxt))
+let s0 = update_ents_pointwise s0 (fst root_entries) "tmp.txt" (Some(Inr(fst tmptxt)))
+(* add and link a.txt at /tmp/a.txt *)
+let s0 = update_inodes s0 (fst atxt) (Some(snd atxt))
+let s0 = update_ents_pointwise s0 (fst tmp_entries) "a.txt" (Some(Inr(fst atxt)))
+
+let _ = print_endline (string_of_state s0)
+
+
+
+@ignore
+# Local variables
+
+Local Variables:
+mode: tuareg
+mode: hi-lock
+mode: outline-minor
+outline-regexp: "@\\|#+"
+End:
+

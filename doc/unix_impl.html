@@ -1,0 +1,483 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta http-equiv="Content-Style-Type" content="text/css" />
+  <meta name="generator" content="pandoc" />
+  <title></title>
+  <style type="text/css">code{white-space: pre;}</style>
+  <style type="text/css">
+table.sourceCode, tr.sourceCode, td.lineNumbers, td.sourceCode {
+  margin: 0; padding: 0; vertical-align: baseline; border: none; }
+table.sourceCode { width: 100%; line-height: 100%; }
+td.lineNumbers { text-align: right; padding-right: 4px; padding-left: 4px; color: #aaaaaa; border-right: 1px solid #aaaaaa; }
+td.sourceCode { padding-left: 5px; }
+code > span.kw { color: #007020; font-weight: bold; }
+code > span.dt { color: #902000; }
+code > span.dv { color: #40a070; }
+code > span.bn { color: #40a070; }
+code > span.fl { color: #40a070; }
+code > span.ch { color: #4070a0; }
+code > span.st { color: #4070a0; }
+code > span.co { color: #60a0b0; font-style: italic; }
+code > span.ot { color: #007020; }
+code > span.al { color: #ff0000; font-weight: bold; }
+code > span.fu { color: #06287e; }
+code > span.er { color: #ff0000; font-weight: bold; }
+  </style>
+</head>
+<body>
+<div id="TOC">
+<ul>
+<li><a href="#unix_impl.ml"><code>unix_impl.ml</code></a><ul>
+<li><a href="#unix_impl_everything"><code>Unix_impl_everything</code></a></li>
+</ul></li>
+</ul>
+</div>
+<h1 id="unix_impl.ml"><a href="#unix_impl.ml"><code>unix_impl.ml</code></a></h1>
+<h2 id="unix_impl_everything"><a href="#unix_impl_everything"><code>Unix_impl_everything</code></a></h2>
+<p>A proxy to the underlying unix filesystem.</p>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+<span class="ot">open</span> Fs_prelude
+<span class="ot">open</span> Fs_spec
+
+<span class="ot">module</span> Unix_impl_everything = <span class="kw">struct</span>
+
+  <span class="co">(* this code copied from persistent queue code; basically allows</span>
+<span class="co">     reading and writing a file in a complicated, but hopefully safe,</span>
+<span class="co">     way (!); FIXME one problem with these functions is that it is not</span>
+<span class="co">     clear what the error is (if one occurs) - FIXME return an option type  *)</span>
+  <span class="ot">module</span> Pqueue = <span class="kw">struct</span>
+
+    <span class="ot">module</span> Prelude = <span class="kw">struct</span>
+    
+      <span class="kw">let</span> debug s = (print_string s; flush stdout)
+    
+      <span class="kw">let</span> <span class="kw">rec</span> itlist f l b =
+        <span class="kw">match</span> l <span class="kw">with</span>
+          [] -&gt; b
+        | (h::t) -&gt; f h (itlist f t b)
+ 
+      <span class="co">(*</span>
+<span class="co">      let fsync = Core.Std.Unix.fsync</span>
+<span class="co">      let fdatasync = Core.Std.Unix.fdatasync</span>
+<span class="co">      *)</span>
+    
+      <span class="kw">let</span> is_Some x = x &lt;&gt; <span class="dt">None</span>
+      
+      <span class="kw">let</span> dest_Some x = <span class="kw">match</span> x <span class="kw">with</span> <span class="dt">Some</span> y -&gt; y | _ -&gt; failwith <span class="st">&quot;dest_Some&quot;</span>
+    
+      <span class="co">(* FIXME change Unix.close in following to close_fd_noerr *)</span>
+      <span class="kw">let</span> close_fd_noerr fd = <span class="kw">try</span> Unix<span class="kw">.</span>close fd <span class="kw">with</span> _ -&gt; ()
+    
+      <span class="kw">type</span> (&#39;a,&#39;b) sum = <span class="dt">Inl</span> <span class="kw">of</span> &#39;a | <span class="dt">Inr</span> <span class="kw">of</span> &#39;b
+      
+      <span class="kw">let</span> is_Inl x = (<span class="kw">match</span> x <span class="kw">with</span> | <span class="dt">Inl</span> x -&gt; <span class="kw">true</span> | _ -&gt; <span class="kw">false</span>)
+      <span class="kw">let</span> is_Inr x = (<span class="kw">match</span> x <span class="kw">with</span> | <span class="dt">Inr</span> x -&gt; <span class="kw">true</span> | _ -&gt; <span class="kw">false</span>)
+    
+      <span class="kw">let</span> dest_Inl x = (<span class="kw">match</span> x <span class="kw">with</span> | <span class="dt">Inl</span> x -&gt; x | _ -&gt; failwith <span class="st">&quot;dest_Inl&quot;</span>)
+      <span class="kw">let</span> dest_Inr x = (<span class="kw">match</span> x <span class="kw">with</span> | <span class="dt">Inr</span> x -&gt; x | _ -&gt; failwith <span class="st">&quot;dest_Inr&quot;</span>)
+    
+      <span class="ot">module</span> State_error = <span class="kw">struct</span>
+    
+        <span class="kw">type</span> (&#39;s,&#39;a) ty_state_error = <span class="dt">SE1</span> <span class="kw">of</span> (&#39;s -&gt; (<span class="dt">exn</span> * &#39;s,&#39;a*&#39;s) sum)
+    
+        <span class="kw">let</span> dest_SE1 (<span class="dt">SE1</span> f) = f
+    
+        <span class="kw">let</span> return x = <span class="dt">SE1</span> (<span class="kw">fun</span> s -&gt; <span class="dt">Inr</span> (x,s))
+    
+        <span class="kw">let</span> bind x f = <span class="dt">SE1</span> (<span class="kw">fun</span> s -&gt;
+          <span class="kw">let</span> x&#39; = (dest_SE1 x) s <span class="kw">in</span>
+          <span class="kw">match</span> x&#39; <span class="kw">with</span>
+          | <span class="dt">Inl</span> (<span class="dt">exn</span>,s) -&gt; <span class="dt">Inl</span> (<span class="dt">exn</span>,s)
+          | <span class="dt">Inr</span> (a,s) -&gt; dest_SE1 (f a) s)
+    
+        <span class="kw">let</span> ( &gt;&gt;= ) = bind
+    
+        <span class="kw">let</span> put s&#39; = <span class="dt">SE1</span> (<span class="kw">fun</span> s -&gt; <span class="dt">Inr</span> ((),s&#39;))
+        <span class="kw">let</span> (_:&#39;s -&gt; (&#39;s,<span class="dt">unit</span>) ty_state_error) = put
+    
+        <span class="kw">let</span> get = <span class="dt">SE1</span> (<span class="kw">fun</span> s -&gt; <span class="dt">Inr</span>(s,s))
+        <span class="kw">let</span> (_:(&#39;s,&#39;s) ty_state_error) = get
+    
+        <span class="kw">let</span> wrap f = <span class="dt">SE1</span> (<span class="kw">fun</span> s -&gt; <span class="kw">try</span> <span class="kw">let</span> fd = f () <span class="kw">in</span> <span class="dt">Inr</span>(fd,s) <span class="kw">with</span> e -&gt; <span class="dt">Inl</span> (e,s))
+        <span class="kw">let</span> (_:(<span class="dt">unit</span> -&gt; &#39;a) -&gt; (&#39;s,&#39;a) ty_state_error) = wrap
+        <span class="co">(* FIXME generalize above type? *)</span>
+    
+        <span class="kw">let</span> run_SE1 s f = (dest_SE1 f) s
+    
+        <span class="co">(* a la Isabelle *)</span>
+        <span class="kw">let</span> ( |&gt; ) x f = (f x)
+    
+      <span class="kw">end</span>  
+    
+    
+      <span class="kw">type</span> myfusebuffer = (<span class="dt">char</span>, Bigarray<span class="kw">.</span>int8_unsigned_elt, Bigarray<span class="kw">.</span>c_layout) Bigarray<span class="kw">.</span>Array1<span class="kw">.</span>t
+    
+      <span class="ot">module</span> A = Bigarray<span class="kw">.</span><span class="dt">Array1</span>
+    
+      <span class="co">(* convenience only; don&#39;t use in production code *)</span>
+      <span class="kw">let</span> array_of_string bs = (
+        <span class="kw">let</span> arr = (Array<span class="kw">.</span>init (String<span class="kw">.</span>length bs) (String<span class="kw">.</span>get bs)) <span class="kw">in</span>
+        <span class="kw">let</span> contents = A<span class="kw">.</span>of_array Bigarray<span class="kw">.</span><span class="dt">char</span> Bigarray<span class="kw">.</span>c_layout arr <span class="kw">in</span>
+        contents)
+      <span class="kw">let</span> (_:string -&gt; myfusebuffer) = array_of_string
+    
+      <span class="co">(* convenience only; don&#39;t use in production code *)</span>
+      <span class="kw">let</span> string_of_array bs = (
+        <span class="kw">let</span> s = String<span class="kw">.</span>create (A<span class="kw">.</span>dim bs) <span class="kw">in</span>
+        <span class="kw">let</span> _ = (
+          <span class="kw">for</span> i = 0 <span class="kw">to</span> (String<span class="kw">.</span>length s) - 1 <span class="kw">do</span>
+            String<span class="kw">.</span>set s i (A<span class="kw">.</span>get bs i) 
+          <span class="kw">done</span>)
+        <span class="kw">in</span>
+        s)
+    
+      <span class="co">(* convert an array of 8 bytes into an int64; bytes are stored most significant first *)</span>
+      <span class="kw">let</span> int64_of_bytes arr = (
+        <span class="kw">let</span> bs = List<span class="kw">.</span>map (Bigarray<span class="kw">.</span>Array1<span class="kw">.</span>get arr) [0;1;2;3;4;5;6;7] <span class="kw">in</span>
+        <span class="kw">let</span> f acc b = (
+          <span class="kw">let</span> acc = Int64<span class="kw">.</span>shift_left acc 8 <span class="kw">in</span>
+          <span class="kw">let</span> i = Char<span class="kw">.</span>code b <span class="kw">in</span>
+          <span class="kw">let</span> low_8_bits = Int64<span class="kw">.</span>of_int i <span class="kw">in</span>
+          <span class="kw">let</span> acc = Int64<span class="kw">.</span>logor acc low_8_bits <span class="kw">in</span>
+          acc)
+        <span class="kw">in</span>
+        List<span class="kw">.</span>fold_left f Int64<span class="kw">.</span>zero bs)
+    
+      <span class="co">(* convert an int64 into an array of bytes *)</span>
+      <span class="kw">let</span> bytes_of_int64 n = (
+        <span class="kw">let</span> arr = array_of_string <span class="st">&quot;01234567&quot;</span> <span class="kw">in</span>
+        <span class="kw">let</span> bs = [7;6;5;4;3;2;1;0] <span class="kw">in</span>
+        <span class="kw">let</span> f i ind = (
+          <span class="kw">let</span> b = (
+            <span class="kw">let</span> i = Int64<span class="kw">.</span>logand i 255L <span class="kw">in</span>
+            <span class="kw">let</span> i = Int64<span class="kw">.</span>to_int i <span class="kw">in</span>
+            <span class="kw">let</span> i = Char<span class="kw">.</span>chr i <span class="kw">in</span>
+            i)
+          <span class="kw">in</span>
+          <span class="kw">let</span> _ = A<span class="kw">.</span>set arr ind b <span class="kw">in</span>
+          <span class="kw">let</span> i = Int64<span class="kw">.</span>shift_right i 8 <span class="kw">in</span>
+          i)
+        <span class="kw">in</span>
+        <span class="kw">let</span> _ = (List<span class="kw">.</span>fold_left f n bs) <span class="kw">in</span>
+        arr)
+      <span class="kw">let</span> (_:int64 -&gt; myfusebuffer) = bytes_of_int64
+    
+    
+      <span class="kw">let</span> <span class="kw">rec</span> replicate x n =
+        <span class="kw">if</span> n &lt; 1 <span class="kw">then</span> []
+        <span class="kw">else</span> x::(replicate x (n - 1));;
+    
+    <span class="kw">end</span>
+    
+    <span class="ot">module</span> Types = <span class="kw">struct</span>
+    
+      <span class="kw">type</span> myfusebuffer = (<span class="dt">char</span>, Bigarray<span class="kw">.</span>int8_unsigned_elt, Bigarray<span class="kw">.</span>c_layout) Bigarray<span class="kw">.</span>Array1<span class="kw">.</span>t
+    
+      <span class="kw">type</span> path = <span class="dt">string</span>
+    
+      <span class="kw">type</span> pre_file_queue = { dir1:path; index1:int64; msgs1:myfusebuffer <span class="dt">list</span> }
+    
+      <span class="kw">type</span> file_queue = <span class="dt">File_queue</span> <span class="kw">of</span> pre_file_queue
+    
+      <span class="kw">exception</span> <span class="dt">File_exception</span>
+    
+    <span class="kw">end</span>
+    
+    <span class="ot">module</span> File_utils = <span class="kw">struct</span>
+    
+      <span class="ot">open</span> Prelude
+      <span class="ot">open</span> Types
+      <span class="ot">open</span> Prelude<span class="kw">.</span>State_error
+    
+      <span class="kw">type</span> myfusebuffer = (<span class="dt">char</span>, Bigarray<span class="kw">.</span>int8_unsigned_elt, Bigarray<span class="kw">.</span>c_layout) Bigarray<span class="kw">.</span>Array1<span class="kw">.</span>t
+    
+      <span class="co">(* sync the file, and the containing dir *)</span>
+      <span class="co">(* in the following, we might like to verify that if an exception is</span>
+<span class="co">         thrown, then at least one exception is reported (the main code</span>
+<span class="co">         and the tidy up code could both throw an exception); the fd is</span>
+<span class="co">         always closed exactly once; might also like to think about an</span>
+<span class="co">         fd-passing interface with type-checking to verify that arguments</span>
+<span class="co">         are used linearly; this could be a simple syntactic check</span>
+<span class="co">         (assuming all sub-functions use the argument linearly); the</span>
+<span class="co">         problem may be in the tidy up code, where fd is used again - how</span>
+<span class="co">         do we know this is linear? because the tidy code is executed</span>
+<span class="co">         following a failure during the main se code ... WRONG! and the</span>
+<span class="co">         failure should really return a new fd reference rather than throw</span>
+<span class="co">         an exception *)</span>
+      <span class="co">(*</span>
+<span class="co">      let myfsync dirname name = (</span>
+<span class="co">        let filename = dirname^&quot;/&quot;^name in</span>
+<span class="co">        let se = (</span>
+<span class="co">          (* sync filename *)</span>
+<span class="co">          put None &gt;&gt;= fun _ -&gt;</span>
+<span class="co">          wrap (fun () -&gt; Unix.openfile filename [Unix.O_RDONLY] 0o777) &gt;&gt;= fun fd -&gt;</span>
+<span class="co">          put (Some(1,fd)) &gt;&gt;= fun _ -&gt;</span>
+<span class="co">          wrap (fun () -&gt; let _ = fsync fd in fd) &gt;&gt;= fun fd -&gt;</span>
+<span class="co">          put (Some(2,fd)) &gt;&gt;= fun _ -&gt;</span>
+<span class="co">          wrap (fun () -&gt; let _ = Unix.close fd in fd) &gt;&gt;= fun fd -&gt;</span>
+<span class="co">          (* sync dirname *)</span>
+<span class="co">          put None &gt;&gt;= fun _ -&gt;</span>
+<span class="co">          wrap (fun () -&gt; Unix.openfile dirname [Unix.O_RDONLY] 0o777) &gt;&gt;= fun fd -&gt;</span>
+<span class="co">          put (Some(3,fd)) &gt;&gt;= fun _ -&gt;</span>
+<span class="co">          wrap (fun () -&gt; let _ = fsync fd in fd) &gt;&gt;= fun fd -&gt;</span>
+<span class="co">          put (Some(4,fd)) &gt;&gt;= fun _ -&gt;</span>
+<span class="co">          wrap (fun () -&gt; let _ = Unix.close fd in fd) &gt;&gt;= fun fd -&gt;</span>
+<span class="co">          put None)</span>
+<span class="co">        in</span>
+<span class="co">        let r = run_SE1 None se in</span>
+<span class="co">        (* tidy up *)</span>
+<span class="co">        let _ = (match r with </span>
+<span class="co">          | Inl (e,Some(1,fd)) -&gt; (</span>
+<span class="co">            (* failed on the fsync; FIXME really fsync fd and similar funs</span>
+<span class="co">               should always return an fd, with a queryable state? or some</span>
+<span class="co">               generic error reporting strategy ie using the State_error</span>
+<span class="co">               monad; currently we are halfway there *)</span>
+<span class="co">            close_fd_noerr fd)</span>
+<span class="co">          | Inl (e,Some(2,fd)) -&gt; () (* failed on the close; but fd still closed *)</span>
+<span class="co">            (* FIXME in the following, we don&#39;t report an error on this close properly *)</span>
+<span class="co">          | Inl (e,Some(3,fd)) -&gt; (close_fd_noerr fd)</span>
+<span class="co">          | Inl (e,Some(4,fd)) -&gt; () </span>
+<span class="co">          | _ -&gt; ())</span>
+<span class="co">        in</span>
+<span class="co">        match r with | Inl _ -&gt; raise File_exception | Inr _ -&gt; ())        </span>
+<span class="co">      let (_: string -&gt; string -&gt; unit) = myfsync</span>
+<span class="co">      *)</span>  
+    
+    
+        <span class="co">(* from http://rosettacode.org/wiki/Read_entire_file#OCaml ; when does memory mapping occur? before Unix.close? or does it continually refer to the file on disk? *)</span>
+    
+    
+      <span class="co">(* tr notes: if the file is empty, the mapping fails; so in this case, we do something special *)</span>
+      <span class="kw">let</span> read_file_as_array filename = (
+        <span class="kw">let</span> se = (
+          put <span class="dt">None</span> &gt;&gt;= <span class="kw">fun</span> _ -&gt;
+          wrap (<span class="kw">fun</span> () -&gt; Unix<span class="kw">.</span>openfile filename [Unix<span class="kw">.</span><span class="dt">O_RDONLY]</span> 0o777) &gt;&gt;= <span class="kw">fun</span> fd -&gt; 
+          put (<span class="dt">Some</span>(1,fd)) &gt;&gt;= <span class="kw">fun</span> _ -&gt;
+          wrap (<span class="kw">fun</span> () -&gt; <span class="kw">let</span> len = Unix<span class="kw">.</span>lseek fd 0 Unix<span class="kw">.</span><span class="dt">SEEK_END</span> <span class="kw">in</span> (fd,len)) &gt;&gt;= <span class="kw">fun</span> (fd,len) -&gt; 
+          wrap (<span class="kw">fun</span> () -&gt; <span class="kw">let</span> _ = Unix<span class="kw">.</span>lseek fd 0 Unix<span class="kw">.</span><span class="dt">SEEK_SET</span> <span class="kw">in</span> fd) &gt;&gt;= <span class="kw">fun</span> fd -&gt; 
+          put (<span class="dt">Some</span>(2,fd)) &gt;&gt;= <span class="kw">fun</span> _ -&gt;
+          <span class="kw">let</span> shared = <span class="kw">false</span> <span class="kw">in</span>  <span class="co">(* modifications are done in memory only *)</span>
+          <span class="kw">let</span> bstr = (
+            <span class="kw">if</span> len=0 <span class="kw">then</span> (
+              Bigarray<span class="kw">.</span>Array1<span class="kw">.</span>create Bigarray<span class="kw">.</span><span class="dt">char</span> Bigarray<span class="kw">.</span>c_layout 0
+            ) <span class="kw">else</span> (
+              Bigarray<span class="kw">.</span>Array1<span class="kw">.</span>map_file fd Bigarray<span class="kw">.</span><span class="dt">char</span> Bigarray<span class="kw">.</span>c_layout shared len))
+          <span class="kw">in</span>
+          return bstr &gt;&gt;= <span class="kw">fun</span> bstr -&gt; 
+          put (<span class="dt">Some</span>(3,fd)) &gt;&gt;= <span class="kw">fun</span> _ -&gt;
+          wrap (<span class="kw">fun</span> () -&gt; <span class="kw">let</span> _ = Unix<span class="kw">.</span>close fd <span class="kw">in</span> fd) &gt;&gt;= <span class="kw">fun</span> fd -&gt;
+          return bstr)
+        <span class="kw">in</span>
+        <span class="kw">let</span> r = run_SE1 <span class="dt">None</span> se <span class="kw">in</span>
+        <span class="kw">let</span> _ = (<span class="kw">match</span> r <span class="kw">with</span>
+          | <span class="dt">Inl</span>(e,<span class="dt">Some</span>(1,fd)) -&gt; (close_fd_noerr fd)
+          | <span class="dt">Inl</span>(e,<span class="dt">Some</span>(2,fd)) -&gt; (close_fd_noerr fd)
+          | <span class="dt">Inl</span>(e,<span class="dt">Some</span>(3,fd)) -&gt; ()
+          | _ -&gt; ())
+          <span class="co">(* FIXME may also want to call release on the fd *)</span>
+        <span class="kw">in</span>
+        <span class="kw">match</span> r <span class="kw">with</span> 
+        | <span class="dt">Inl</span> _ -&gt; raise <span class="dt">File_exception</span>
+        | <span class="dt">Inr</span> (bstr,_) -&gt; bstr)
+      <span class="kw">let</span> (_:string -&gt; myfusebuffer) = read_file_as_array
+    
+      <span class="co">(* FIXME probably doesn&#39;t work if arr length 0 *)</span>
+      <span class="kw">let</span> write_array_as_file arr filename = (
+        <span class="kw">let</span> len = Bigarray<span class="kw">.</span>Array1<span class="kw">.</span>dim arr <span class="kw">in</span>
+        <span class="kw">let</span> se = (
+          put <span class="dt">None</span> &gt;&gt;= <span class="kw">fun</span> _ -&gt; 
+          wrap (<span class="kw">fun</span> () -&gt; Unix<span class="kw">.</span>openfile filename [Unix<span class="kw">.</span>O_RDWR;Unix<span class="kw">.</span>O_CREAT;Unix<span class="kw">.</span><span class="dt">O_TRUNC]</span> 0o640) &gt;&gt;= <span class="kw">fun</span> fd -&gt;
+          put (<span class="dt">Some</span>(1,fd)) &gt;&gt;= <span class="kw">fun</span> _ -&gt; 
+          wrap (<span class="kw">fun</span> () -&gt; <span class="kw">let</span> _ = Unix<span class="kw">.</span>lseek fd 0 Unix<span class="kw">.</span><span class="dt">SEEK_SET</span> <span class="kw">in</span> fd) &gt;&gt;= <span class="kw">fun</span> fd -&gt; 
+          put (<span class="dt">Some</span>(2,fd)) &gt;&gt;= <span class="kw">fun</span> _ -&gt; 
+          <span class="kw">let</span> shared = <span class="kw">true</span> <span class="kw">in</span> 
+          <span class="kw">let</span> bstr = (Bigarray<span class="kw">.</span>Array1<span class="kw">.</span>map_file fd Bigarray<span class="kw">.</span><span class="dt">char</span> Bigarray<span class="kw">.</span>c_layout shared len) <span class="kw">in</span>
+          <span class="kw">let</span> _ = Bigarray<span class="kw">.</span>Array1<span class="kw">.</span>blit arr bstr <span class="kw">in</span> 
+          return bstr &gt;&gt;= <span class="kw">fun</span> bstr -&gt;
+          put (<span class="dt">Some</span>(3,fd)) &gt;&gt;= <span class="kw">fun</span> _ -&gt;
+          wrap (<span class="kw">fun</span> () -&gt; <span class="kw">let</span> _ = Unix<span class="kw">.</span>close fd <span class="kw">in</span> fd) &gt;&gt;= <span class="kw">fun</span> fd -&gt; 
+          return bstr)
+          <span class="co">(* FIXME don&#39;t we need msync and munmap if we want to write using maps? *)</span>
+          <span class="co">(* let _ = msync bstr in msync called by release *)</span>
+          <span class="co">(* FIXME FIXME release not in Bigarray.Genarray yet *)</span>
+          <span class="co">(* let _ = release fd in *)</span>
+        <span class="kw">in</span>
+        <span class="kw">let</span> r = run_SE1 <span class="dt">None</span> se <span class="kw">in</span>
+        <span class="kw">let</span> _ = (<span class="kw">match</span> r <span class="kw">with</span>
+          | <span class="dt">Inl</span>(e,<span class="dt">Some</span>(1,fd)) -&gt; (close_fd_noerr fd)
+          | <span class="dt">Inl</span>(e,<span class="dt">Some</span>(2,fd)) -&gt; (close_fd_noerr fd)
+          | <span class="dt">Inl</span>(e,<span class="dt">Some</span>(3,fd)) -&gt; ()
+          | _ -&gt; ())
+          <span class="co">(* FIXME may also want to call release on the fd *)</span>
+        <span class="kw">in</span>
+        <span class="kw">match</span> r <span class="kw">with</span> 
+        | <span class="dt">Inl</span> _ -&gt; raise <span class="dt">File_exception</span>
+        | _ -&gt; ())
+      <span class="kw">let</span> (_:myfusebuffer -&gt; <span class="dt">string</span> -&gt; <span class="dt">unit</span>) = write_array_as_file
+    
+      <span class="co">(*</span>
+<span class="co">      let write_array_atomically arr dirname name = (</span>
+<span class="co">        try (</span>
+<span class="co">          let tmpname = name^&quot;.tmp&quot; in</span>
+<span class="co">          let _ = try Unix.unlink (dirname^&quot;/&quot;^tmpname) with Unix.Unix_error _ -&gt; () in </span>
+<span class="co">          let _ = write_array_as_file arr (dirname^&quot;/&quot;^tmpname) in</span>
+<span class="co">          let _ = myfsync dirname tmpname in</span>
+<span class="co">          let _ = Unix.rename (dirname^&quot;/&quot;^tmpname) (dirname^&quot;/&quot;^name) in</span>
+<span class="co">          let _ = myfsync dirname name in</span>
+<span class="co">          ()</span>
+<span class="co">        ) with e -&gt; raise File_exception)  </span>
+<span class="co">      let (_:myfusebuffer -&gt; string -&gt; string -&gt; unit) = write_array_atomically</span>
+<span class="co">      *)</span>
+    
+      <span class="kw">let</span> file_exists filename = (
+        <span class="kw">try</span> (
+          <span class="kw">let</span> _ = Unix<span class="kw">.</span>stat filename <span class="kw">in</span>
+          <span class="kw">true</span>
+        ) <span class="kw">with</span> _ -&gt; <span class="kw">false</span>)
+    
+    
+    <span class="kw">end</span>
+
+  <span class="kw">end</span> <span class="co">(* Pqueue *)</span>
+
+
+
+  <span class="ot">open</span> Prelude
+  <span class="ot">open</span> Fs_types1 <span class="co">(* FIXME remove dependence? have a core types and a state types? *)</span>
+
+  <span class="kw">type</span> dir_ref = <span class="dt">string</span> <span class="dt">list</span>
+  <span class="kw">type</span> inode_ref = <span class="dt">string</span> <span class="dt">list</span>
+
+
+  <span class="kw">type</span> impl = { r1:dir_ref } <span class="co">(* r1 is the overall root; need to be careful when making symlinks *)</span>
+
+  <span class="kw">let</span> string_of_names s0 ns = (<span class="st">&quot;/&quot;</span>^(String<span class="kw">.</span>concat <span class="st">&quot;/&quot;</span> (s0.r1@ns)))
+
+  <span class="co">(* FIXME what do we do if the call throws an error? Ideally the</span>
+<span class="co">     later levels should ensure these funcs are never called such that</span>
+<span class="co">     they can throw an error; so this is actually an error in the</span>
+<span class="co">     later levels probably *)</span>
+
+  <span class="kw">let</span> do_try&#39; f x = <span class="kw">try</span> (f x) <span class="kw">with</span> e -&gt; (print_endline <span class="st">&quot;unix_impl: this should not happen&quot;</span>; raise e)
+  <span class="kw">let</span> do_try f x s0 = <span class="kw">try</span> (f x); return s0 <span class="kw">with</span> e -&gt; (print_endline <span class="st">&quot;unix_impl: this should not happen&quot;</span>; raise e)
+
+  <span class="kw">let</span> dest_ref s0 d0_ref = (    
+    <span class="kw">let</span> f () = (
+      <span class="kw">let</span> s = <span class="kw">try</span> <span class="dt">Some</span>(Unix<span class="kw">.</span>LargeFile<span class="kw">.</span>stat (string_of_names s0 d0_ref)) <span class="kw">with</span> _ -&gt; <span class="dt">None</span> <span class="kw">in</span>
+      <span class="kw">match</span> s <span class="kw">with</span> 
+      | <span class="dt">Some</span> s -&gt; (s.Unix<span class="kw">.</span>LargeFile<span class="kw">.</span>st_ino)
+      | <span class="dt">None</span> -&gt; (failwith <span class="st">&quot;unix_impl/dest_ref&quot;</span>))
+    <span class="kw">in</span>
+    do_try&#39; f ())
+
+  <span class="co">(* FIXME this is a hack - dest_dir_ref will work on inode_refs etc *)</span>
+  <span class="kw">let</span> dest_dir_ref = dest_ref
+  <span class="kw">let</span> dest_inode_ref = dest_ref
+    
+
+  <span class="kw">let</span> link_file s0 i0_ref d0_ref name = (
+    <span class="kw">let</span> f () = Unix<span class="kw">.</span>link (string_of_names s0 i0_ref) (string_of_names s0 (d0_ref@[name])) <span class="kw">in</span>
+    do_try f () s0)
+
+  <span class="kw">let</span> unlink s0 d0_ref name = (
+    <span class="kw">let</span> f () = Unix<span class="kw">.</span>unlink (string_of_names s0 (d0_ref@[name])) <span class="kw">in</span>
+    do_try f () s0)
+
+  <span class="kw">let</span> mkdir s0 d0_ref name = (
+    <span class="kw">let</span> f () = Unix<span class="kw">.</span>mkdir (string_of_names s0 (d0_ref@[name])) 0o777 <span class="kw">in</span>
+    do_try f () s0)
+
+  <span class="kw">let</span> mv s0 d0_ref name0 d1_ref name1 = (
+    <span class="kw">let</span> f () = Unix<span class="kw">.</span>rename (string_of_names s0 (d0_ref@[name0])) (string_of_names s0 (d1_ref@[name1])) <span class="kw">in</span>
+    do_try f () s0)
+
+  <span class="kw">let</span> mvdir s0 d0_ref name0 d1_ref name1 = (
+    <span class="kw">let</span> f () = Unix<span class="kw">.</span>rename (string_of_names s0 (d0_ref@[name0])) (string_of_names s0 (d1_ref@[name1])) <span class="kw">in</span>
+    do_try f () s0)
+
+  <span class="kw">let</span> read s0 i0_ref = (
+    <span class="kw">let</span> f () = (
+      <span class="kw">let</span> arr = Pqueue<span class="kw">.</span>File_utils<span class="kw">.</span>read_file_as_array (string_of_names s0 i0_ref) <span class="kw">in</span>
+      {state2=s0; ret2=(<span class="dt">Bytes1</span> (MyDynArray<span class="kw">.</span>of_array arr))})
+    <span class="kw">in</span>
+    do_try&#39; f ())
+
+  <span class="kw">let</span> readdir s0 d0_ref = (
+    <span class="kw">let</span> f () = (
+      <span class="kw">let</span> dh = Unix<span class="kw">.</span>opendir (string_of_names s0 d0_ref) <span class="kw">in</span>
+      <span class="kw">let</span> s = <span class="dt">ref</span> [] <span class="kw">in</span>
+      <span class="kw">let</span> <span class="kw">rec</span> g () = (
+        (s:=(Unix<span class="kw">.</span>readdir dh)::(!s)); g ())
+      <span class="kw">in</span>
+      <span class="kw">let</span> _ = <span class="kw">try</span> g () <span class="kw">with</span> _ -&gt; () <span class="kw">in</span>
+      <span class="kw">let</span> names = List<span class="kw">.</span>filter (<span class="kw">fun</span> x -&gt; x &lt;&gt; <span class="st">&quot;.&quot;</span> &amp;&amp; x &lt;&gt; <span class="st">&quot;..&quot;</span>) (!s) <span class="kw">in</span>
+      <span class="kw">let</span> names = List<span class="kw">.</span>sort Pervasives<span class="kw">.</span>compare names <span class="kw">in</span>
+      {state2=s0; ret2=(<span class="dt">Names1</span> names)})
+    <span class="kw">in</span>
+    do_try&#39; f ())
+
+  <span class="kw">let</span> resolve1 s0 d0_ref name = (
+    <span class="kw">let</span> f () = (
+      <span class="kw">let</span> s = <span class="kw">try</span> <span class="dt">Some</span>(Unix<span class="kw">.</span>LargeFile<span class="kw">.</span>stat (string_of_names s0 (d0_ref@[name]))) <span class="kw">with</span> _ -&gt; <span class="dt">None</span> <span class="kw">in</span>
+      <span class="kw">match</span> s <span class="kw">with</span> 
+      | <span class="dt">Some</span> s -&gt; (
+        <span class="kw">if</span> (s.Unix<span class="kw">.</span>LargeFile<span class="kw">.</span>st_kind = Unix<span class="kw">.</span><span class="dt">S_DIR</span>) <span class="kw">then</span> 
+          <span class="dt">Some</span>(<span class="dt">Inl</span>(d0_ref@[name]))
+        <span class="kw">else</span>
+          <span class="dt">Some</span>(<span class="dt">Inr</span>(d0_ref@[name])))
+      | <span class="dt">None</span> -&gt; <span class="dt">None</span>)
+    <span class="kw">in</span>
+    do_try&#39; f ())      
+
+  <span class="kw">let</span> rm = unlink
+
+  <span class="kw">let</span> rmdir = unlink
+
+  <span class="kw">let</span> touch s0 d0_ref name = (
+    <span class="kw">let</span> f () = (
+      <span class="kw">let</span> fd = Unix<span class="kw">.</span>openfile (string_of_names s0 (d0_ref@[name])) [Unix<span class="kw">.</span><span class="dt">O_CREAT]</span> 0o777 <span class="kw">in</span>
+      <span class="kw">let</span> _ = Unix<span class="kw">.</span>close fd <span class="kw">in</span>
+      ())
+    <span class="kw">in</span>
+    do_try f () s0)
+
+  <span class="co">(* at the moment, fs_spec means that a write involves a read of the</span>
+<span class="co">     entire file; this will be very costly with this unix</span>
+<span class="co">     implementation *)</span>
+  <span class="kw">let</span> write s0 i0_ref c = (
+    <span class="kw">let</span> f () = (
+      <span class="kw">let</span> arr = Pqueue<span class="kw">.</span>File_utils<span class="kw">.</span>write_array_as_file (MyDynArray<span class="kw">.</span>to_array c) (string_of_names s0 i0_ref) <span class="kw">in</span>
+      ())
+    <span class="kw">in</span>
+    do_try f () s0)
+    
+  <span class="kw">let</span> state0 = { r1=[<span class="st">&quot;tmp&quot;</span>;<span class="st">&quot;unix_impl_test&quot;</span>] }
+
+  <span class="kw">let</span> ops1 = {
+    get_init_state1=(<span class="kw">fun</span> () -&gt; state0);
+    get_root1=(<span class="kw">fun</span> s0 -&gt; <span class="dt">Some[]</span>); <span class="co">(* []  is the dir ref for the root dir *)</span>
+    dest_dir_ref1=dest_dir_ref;
+    dest_inode_ref1=dest_inode_ref;
+    get_symlink1=(<span class="kw">fun</span> s0 -&gt; <span class="kw">fun</span> i0_ref -&gt; <span class="kw">false</span>);
+    link_file1=(link_file);
+    unlink1=(unlink);
+    mkdir1=(mkdir);
+    mv1=(mv);
+    mvdir1=(mvdir);
+    read1=(read);
+    readdir1=(readdir);
+    resolve11=(resolve1);
+    rm1=(rm);
+    rmdir1=(rmdir);
+    touch1=(touch);
+    write1=(write);
+    set_symlink1=(<span class="kw">fun</span> _ -&gt; <span class="kw">fun</span> _ -&gt; <span class="kw">fun</span> f -&gt; failwith <span class="st">&quot;set_symlink&quot;</span>);
+  }
+
+<span class="kw">end</span>
+
+</code></pre>
+</body>
+</html>

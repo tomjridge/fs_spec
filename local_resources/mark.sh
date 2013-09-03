@@ -5,8 +5,7 @@ let _ = Ocaml.packs := ["unix"]
 let _ = Ocaml.sources := [
 (*  "/tmp/l/general/research/code/ocaml/lib/hol_light_lib.ml";
   "/tmp/l/general/research/code/ocaml/lib/fmap.ml"; *)
-(*  "/tmp/l/general/research/parsing/old/p3_lib.ml" *)
-  "p3_lib.ml"
+  "/tmp/l/general/research/parsing/old/p3_lib.ml"
 ]
 
 (* FIXME we really want to make this as independent of other things as possible; maybe don't use P3 for command line parsing? *)

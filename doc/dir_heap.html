@@ -1,0 +1,496 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta http-equiv="Content-Style-Type" content="text/css" />
+  <meta name="generator" content="pandoc" />
+  <title></title>
+  <style type="text/css">code{white-space: pre;}</style>
+  <style type="text/css">
+table.sourceCode, tr.sourceCode, td.lineNumbers, td.sourceCode {
+  margin: 0; padding: 0; vertical-align: baseline; border: none; }
+table.sourceCode { width: 100%; line-height: 100%; }
+td.lineNumbers { text-align: right; padding-right: 4px; padding-left: 4px; color: #aaaaaa; border-right: 1px solid #aaaaaa; }
+td.sourceCode { padding-left: 5px; }
+code > span.kw { color: #007020; font-weight: bold; }
+code > span.dt { color: #902000; }
+code > span.dv { color: #40a070; }
+code > span.bn { color: #40a070; }
+code > span.fl { color: #40a070; }
+code > span.ch { color: #4070a0; }
+code > span.st { color: #4070a0; }
+code > span.co { color: #60a0b0; font-style: italic; }
+code > span.ot { color: #007020; }
+code > span.al { color: #ff0000; font-weight: bold; }
+code > span.fu { color: #06287e; }
+code > span.er { color: #ff0000; font-weight: bold; }
+  </style>
+</head>
+<body>
+<div id="TOC">
+<ul>
+<li><a href="#dir_heap.ml"><code>dir_heap.ml</code></a><ul>
+<li><a href="#dir_heap_types1-and-basic-operations"><code>Dir_heap_types1</code> and basic operations</a></li>
+<li><a href="#fs_ops1"><code>Fs_ops1</code></a></li>
+<li><a href="#dir-heap-ops">Dir heap ops</a></li>
+</ul></li>
+</ul>
+</div>
+<h1 id="dir_heap.ml"><a href="#dir_heap.ml"><code>dir_heap.ml</code></a></h1>
+<h2 id="dir_heap_types1-and-basic-operations"><a href="#dir_heap_types1-and-basic-operations"><code>Dir_heap_types1</code> and basic operations</a></h2>
+<p>Types for a representation using an inode heap and a dir heap</p>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+<span class="ot">open</span> Fs_prelude
+<span class="ot">open</span> Fs_spec
+
+<span class="ot">module</span> Dir_heap_types = <span class="kw">struct</span>
+
+  <span class="ot">open</span> Prelude
+  <span class="ot">open</span> Fs_types1 <span class="co">(* FIXME remove dependence? have a core types and a state types? *)</span>
+
+  <span class="kw">type</span> dir_ref = <span class="dt">Dir_ref</span> <span class="kw">of</span> <span class="dt">int</span>
+
+  <span class="kw">let</span> dest_dir_ref s0 (<span class="dt">Dir_ref</span> i) = i
+
+
+  <span class="co">(* a reference to a map of entries *)</span>
+  <span class="co">(*</span>
+<span class="co">  type entries_ref = Entries_ref of int</span>
+
+<span class="co">  let dest_entries_ref (Entries_ref i) = i</span>
+<span class="co">  *)</span>
+
+  <span class="kw">type</span> inode_ref = <span class="dt">Inode_ref</span> <span class="kw">of</span> <span class="dt">int</span>
+
+  <span class="kw">let</span> dest_inode_ref s0 (<span class="dt">Inode_ref</span> i) = i
+
+  <span class="co">(*</span>
+<span class="co">  type file_contents_ref = File_contents_ref of int</span>
+
+<span class="co">  let dest_file_contents_ref (File_contents_ref i) = i</span>
+<span class="co">  *)</span>
+
+  <span class="co">(* directories *)</span>
+  <span class="kw">type</span> entry = (dir_ref,inode_ref) sum
+  <span class="kw">let</span> is_dir_ref_entry = is_Inl
+  <span class="kw">let</span> is_inode_ref_entry = is_Inr
+  <span class="kw">let</span> dest_dir_ref_entry = dest_Inl
+  <span class="kw">let</span> dest_inode_ref_entry = dest_Inr
+
+  <span class="ot">module</span> Entries = <span class="dt">MyMap</span>(
+    <span class="kw">struct</span> 
+      <span class="kw">type</span> key = name
+      <span class="kw">type</span> value = entry <span class="dt">option</span>
+      <span class="kw">let</span> compare = Pervasives<span class="kw">.</span>compare
+      <span class="kw">let</span> default = <span class="dt">None</span>
+      <span class="kw">let</span> is_default = (<span class="kw">fun</span> x -&gt; x=None)
+    <span class="kw">end</span>)
+
+  <span class="kw">type</span> entries = Entries<span class="kw">.</span>ty_map <span class="co">(* FIXME in spec? *)</span>
+
+  <span class="kw">type</span> dir = {
+    dentries:entries
+  }
+
+  <span class="kw">type</span> inode = {
+    fcontents:file_contents;
+    is_symlink:bool
+  }
+
+  <span class="co">(* state type *)</span>
+
+  <span class="ot">module</span> Dir_map = <span class="dt">MyMap</span>(
+    <span class="kw">struct</span> 
+      <span class="kw">type</span> key = dir_ref
+      <span class="kw">type</span> value = dir <span class="dt">option</span>
+      <span class="kw">let</span> compare = Pervasives<span class="kw">.</span>compare
+      <span class="kw">let</span> default = <span class="dt">None</span>
+      <span class="kw">let</span> is_default = (<span class="kw">fun</span> x -&gt; x=None)
+    <span class="kw">end</span>)
+
+  <span class="ot">module</span> Inode_map = <span class="dt">MyMap</span>(
+    <span class="kw">struct</span>
+      <span class="kw">type</span> key = inode_ref
+      <span class="kw">type</span> value = inode <span class="dt">option</span>
+      <span class="kw">let</span> compare = Pervasives<span class="kw">.</span>compare
+      <span class="kw">let</span> default = <span class="dt">None</span>
+      <span class="kw">let</span> is_default = (<span class="kw">fun</span> x -&gt; x=None)
+    <span class="kw">end</span>)
+
+  <span class="kw">type</span> state = {
+    dirs:Dir_map.ty_map;
+    <span class="co">(* entries:Entries_map.ty_map; *)</span>
+    inodes:Inode_map.ty_map;
+    <span class="co">(* contents:Contents_map.ty_map *)</span>
+  }
+
+  <span class="kw">let</span> state0&#39; = {
+    dirs=Dir_map.empty;
+    inodes=Inode_map.empty;
+    <span class="co">(* entries=Entries_map.empty;</span>
+<span class="co">    contents=Contents_map.empty *)</span>
+  }  
+
+  <span class="kw">let</span> get_root s0 = (<span class="dt">Dir_ref</span> 0)
+
+  <span class="co">(* lift find2 *)</span>
+  <span class="kw">let</span> lookup_dir s k = Dir_map<span class="kw">.</span>find2 k s.dirs
+  <span class="kw">let</span> (_:state -&gt; dir_ref -&gt; dir <span class="dt">option</span>) = lookup_dir
+
+  <span class="kw">let</span> lookup_inode s k = Inode_map<span class="kw">.</span>find2 k s.inodes
+  <span class="kw">let</span> (_:state -&gt; inode_ref -&gt; inode <span class="dt">option</span>) = lookup_inode
+
+
+  <span class="co">(* FIXME may prefer a version that returns a (ref,obj) option ; see eg mvdir *)</span>
+  <span class="kw">let</span> resolve1 s0 d0_ref name = (
+    <span class="kw">let</span> <span class="dt">Some</span>(d0) = lookup_dir s0 d0_ref <span class="kw">in</span>
+    <span class="kw">let</span> m = d0.dentries <span class="kw">in</span>
+    Entries<span class="kw">.</span>find2 name m)
+  <span class="kw">let</span> (_:state -&gt; dir_ref -&gt; name -&gt; entry <span class="dt">option</span>) = resolve1
+
+  <span class="co">(* these update the actual maps *)</span>
+
+  <span class="kw">let</span> update_dirs s k v = {s <span class="kw">with</span> dirs=(Dir_map<span class="kw">.</span>add k v s.dirs) }
+  <span class="kw">let</span> (_:state -&gt; dir_ref -&gt; dir <span class="dt">option</span> -&gt; state) = update_dirs
+    
+  <span class="co">(*</span>
+<span class="co">  let update_entries s k v = {s with entries=(Entries_map.add k v s.entries) }</span>
+<span class="co">  let (_:state -&gt; entries_ref -&gt; Entries.ty_map option -&gt; state) = update_entries</span>
+<span class="co">  *)</span>
+
+  <span class="kw">let</span> update_inodes s k v = {s <span class="kw">with</span> inodes=(Inode_map<span class="kw">.</span>add k v s.inodes) }
+  <span class="kw">let</span> (_:state -&gt; inode_ref -&gt; inode <span class="dt">option</span> -&gt; state) = update_inodes
+
+  <span class="co">(*</span>
+<span class="co">  let update_contents s k v = {s with contents=(Contents_map.add k v s.contents) }</span>
+<span class="co">  let (_:state -&gt; file_contents_ref -&gt; bytes option -&gt; state) = update_contents</span>
+<span class="co">  *)</span>
+
+  <span class="co">(* common case is to update with Some *)</span>
+  <span class="kw">let</span> update_drs_some s (k,v) = (update_dirs s k (<span class="dt">Some</span> v))
+  <span class="kw">let</span> update_inds_some s (k,v) = (update_inodes s k (<span class="dt">Some</span> v))
+  <span class="co">(*</span>
+<span class="co">  let update_ents_some s (k,v) = (update_entries s k (Some v))</span>
+<span class="co">  let update_cnts_some s (k,v) = (update_contents s k (Some v))</span>
+<span class="co">  *)</span>
+  
+
+  <span class="co">(*</span>
+<span class="co">  let lookup_entries s k = Entries_map.find2 k s.entries</span>
+<span class="co">  let (_:state -&gt; entries_ref -&gt; Entries.ty_map option) = lookup_entries</span>
+<span class="co">  *)</span>
+
+  <span class="co">(* these add entries to the maps *)</span>
+  
+  <span class="co">(* r is an entries_ref *)</span>
+  <span class="kw">let</span> update_ents_pointwise s d0_ref k v = (
+    <span class="kw">let</span> <span class="dt">Some</span>(d0) = lookup_dir s d0_ref <span class="kw">in</span>
+    <span class="kw">let</span> m = d0.dentries <span class="kw">in</span>
+    <span class="kw">let</span> m&#39; = Entries<span class="kw">.</span>add k v m <span class="kw">in</span>
+    <span class="kw">let</span> s&#39; = update_drs_some s (d0_ref,{d0 <span class="kw">with</span> dentries=m&#39;}) <span class="kw">in</span>
+    s&#39;)
+  <span class="kw">let</span> (_:state -&gt; dir_ref -&gt; name -&gt; entry <span class="dt">option</span> -&gt; state) = update_ents_pointwise
+  
+
+  <span class="co">(* FIXME want to use new_dir, not this *)</span>
+  <span class="kw">let</span> _FIXME_new_dir_ref s = (
+    <span class="kw">let</span> binds = Dir_map<span class="kw">.</span>bindings s.dirs <span class="kw">in</span>
+    <span class="kw">let</span> binds = List<span class="kw">.</span>map (<span class="kw">fun</span> (k,v) -&gt; dest_dir_ref s k) binds <span class="kw">in</span>
+    <span class="kw">let</span> max = List<span class="kw">.</span>fold_left (<span class="kw">fun</span> m -&gt; <span class="kw">fun</span> r -&gt; max m r) 0 binds <span class="kw">in</span>
+    <span class="dt">Dir_ref</span>(max+1))
+ 
+  <span class="kw">let</span> new_dir s0 = (
+    <span class="kw">let</span> d0_ref = _FIXME_new_dir_ref s0 <span class="kw">in</span>
+    <span class="kw">let</span> d0 = { dentries = Entries<span class="kw">.</span>empty } <span class="kw">in</span>
+    <span class="kw">let</span> s0 = update_drs_some s0 (d0_ref,d0) <span class="kw">in</span>
+    (s0,(d0_ref,d0)))
+
+  <span class="kw">let</span> _FIXME_new_inode_ref s = (
+    <span class="kw">let</span> binds = Inode_map<span class="kw">.</span>bindings s.inodes <span class="kw">in</span>
+    <span class="kw">let</span> binds = List<span class="kw">.</span>map (<span class="kw">fun</span> (k,v) -&gt; dest_inode_ref s k) binds <span class="kw">in</span>
+    <span class="kw">let</span> max = List<span class="kw">.</span>fold_left (<span class="kw">fun</span> m -&gt; <span class="kw">fun</span> r -&gt; max m r) 0 binds <span class="kw">in</span>
+    <span class="dt">Inode_ref</span>(max+1))
+
+  <span class="kw">let</span> new_inode s0 = (
+    <span class="kw">let</span> i0_ref = _FIXME_new_inode_ref s0 <span class="kw">in</span>
+    <span class="kw">let</span> i0 = { fcontents=(MyDynArray<span class="kw">.</span>create ()); is_symlink=false } <span class="kw">in</span>
+    <span class="kw">let</span> s0 = update_inds_some s0 (i0_ref,i0) <span class="kw">in</span>
+    (s0,(i0_ref,i0)))
+
+  <span class="kw">let</span> state0 = (
+    <span class="co">(* an initial state with a root dir *)</span>
+    <span class="kw">let</span> root = (<span class="dt">Dir_ref</span> 0, { dentries=Entries.empty }) <span class="kw">in</span>
+    <span class="kw">let</span> s0 = update_drs_some state0&#39; root <span class="kw">in</span>
+    s0)  
+
+
+<span class="kw">end</span></code></pre>
+<h2 id="fs_ops1"><a href="#fs_ops1"><code>Fs_ops1</code></a></h2>
+<p>Implement the basic file system operations</p>
+<p>List of all operations involved in dependencies:</p>
+<ul>
+<li>creation of a <code>dir_ref</code> can be dependent on creation of a new entries (eg <code>mkdir</code>)</li>
+<li><code>update_ents_pointwise</code> (<code>internal_link_dir</code> or <code>internal_link_file</code>) can be dependent on creation of a new <code>dir_ref</code> (and writing of that <code>dir_ref</code> into <code>s0.dirs</code>) (eg <code>mkdir</code>)</li>
+<li><code>internal_link_dir</code> can be dependent on <code>update_ents_pointwise</code> (eg <code>mkdir</code>)</li>
+<li>creation of a new <code>inode_ref</code> can be dependent on creation of a new <code>file_contents</code> (eg touch)</li>
+</ul>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+<span class="co">(* FIXME tidy this up *)</span>
+<span class="co">(*</span>
+<span class="co">module X = struct</span>
+
+<span class="co">  open Fs_types1</span>
+<span class="co">  </span>
+<span class="co">  (* hack to get an abstract state type *)</span>
+<span class="co">  module Y : sig </span>
+<span class="co">    type t1</span>
+<span class="co">    type t2</span>
+<span class="co">    type t3</span>
+<span class="co">    type t4</span>
+<span class="co">    type t5</span>
+<span class="co">  end = struct </span>
+<span class="co">    type t1 = int</span>
+<span class="co">    type t2 = int</span>
+<span class="co">    type t3 = int</span>
+<span class="co">    type t4 = int</span>
+<span class="co">    type t5 = int</span>
+<span class="co">  end </span>
+
+<span class="co">end</span>
+<span class="co">*)</span>
+
+<span class="ot">module</span> Fs_ops1 = <span class="kw">struct</span>
+
+  <span class="ot">open</span> Prelude
+  <span class="ot">open</span> Fs_types1
+
+  <span class="co">(* for the purposes of type-checking the following defns without spurious type vars *)</span>
+  <span class="ot">module</span> X1 = <span class="kw">struct</span>
+    <span class="kw">type</span> ty_ops&#39; = (X<span class="kw">.</span>Y<span class="kw">.</span>t1,X<span class="kw">.</span>Y<span class="kw">.</span>t2,X<span class="kw">.</span>Y<span class="kw">.</span>t3,X<span class="kw">.</span>Y<span class="kw">.</span>t4,X<span class="kw">.</span>Y<span class="kw">.</span>t5) ty_state_ops
+    <span class="kw">type</span> dir_ref&#39; = X<span class="kw">.</span>Y<span class="kw">.</span>t1
+    <span class="kw">type</span> ty_impl&#39; = X<span class="kw">.</span>Y<span class="kw">.</span>t5
+    <span class="kw">type</span> inode_ref&#39; = X<span class="kw">.</span>Y<span class="kw">.</span>t3
+    <span class="kw">type</span> ty_return&#39; = X<span class="kw">.</span>Y<span class="kw">.</span>t5 ty_return2
+  <span class="kw">end</span>
+  <span class="ot">open</span> X1
+
+  <span class="kw">let</span> dest_dir_ref_entry = dest_Inl
+  <span class="kw">let</span> dest_inode_ref_entry = dest_Inr
+
+
+<span class="co">(*</span>
+<span class="co">  let update_ents_pointwise = Lift.update_ents_pointwise</span>
+
+<span class="co">  let state0 = (</span>
+<span class="co">    (* an initial state with a root dir *)</span>
+<span class="co">    let root = (Dir_ref 0, { dentries=Entries.empty }) in</span>
+<span class="co">    let s0 = Lift.update_drs_some state0 root in</span>
+<span class="co">    s0)  </span>
+
+<span class="co">  let get_dir s0 d0_ref = (</span>
+<span class="co">    let Some(d0) = Lift.lookup_dir s0 d0_ref in</span>
+<span class="co">    d0)</span>
+
+<span class="co">  let get_inode s0 i0_ref = (</span>
+<span class="co">    let Some(i0) = Lift.lookup_inode s0 i0_ref in</span>
+<span class="co">    i0)</span>
+
+<span class="co">  (*</span>
+<span class="co">  let get_entries s0 es0_ref = (</span>
+<span class="co">    let Some(es0) = lookup_entries s0 es0_ref in</span>
+<span class="co">    es0)</span>
+<span class="co">  *)</span>
+
+<span class="co">  let get_root s0 = (</span>
+<span class="co">    let Some(d) = Lift.lookup_dir s0 (Dir_ref 0) in</span>
+<span class="co">    (Dir_ref 0, d))</span>
+<span class="co">*)</span>
+
+</code></pre>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="co">(* link directory d1 into d0 under name *)</span>
+  <span class="kw">let</span> internal_link_dir ops s0 d0_ref d1_ref name = (
+    <span class="kw">let</span> s0 = ops.update_ents_pointwise s0 d0_ref name (<span class="dt">Some</span>(<span class="dt">Inl</span>(d1_ref))) <span class="kw">in</span>
+    s0)
+  <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; dir_ref&#39; -&gt; dir_ref&#39; -&gt; name -&gt; ty_impl&#39;) = internal_link_dir
+
+  <span class="kw">let</span> internal_unlink ops s0 d0_ref name = (
+    <span class="kw">let</span> s0 = ops.update_ents_pointwise s0 d0_ref name <span class="dt">None</span> <span class="kw">in</span>
+    s0)
+  <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; dir_ref&#39; -&gt; name -&gt; ty_impl&#39;) = internal_unlink
+</code></pre>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="kw">let</span> internal_link_file ops s0 i1_ref d0_ref name = (
+    <span class="kw">let</span> s0 = ops.update_ents_pointwise s0 d0_ref name (<span class="dt">Some</span>(<span class="dt">Inr</span>(i1_ref))) <span class="kw">in</span>
+    s0)
+  <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; inode_ref&#39; -&gt; dir_ref&#39; -&gt; name -&gt; ty_impl&#39;) = internal_link_file
+</code></pre>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="kw">let</span> link_file ops s0 i1_ref d0_ref name = (
+    <span class="kw">let</span> s0 = internal_link_file ops s0 i1_ref d0_ref name <span class="kw">in</span>
+    return s0)
+  <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; inode_ref&#39; -&gt; dir_ref&#39; -&gt; name -&gt; ty_return&#39;) = link_file</code></pre>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="kw">let</span> unlink ops s0 d0_ref name = (
+    <span class="kw">let</span> s0 = ops.update_ents_pointwise s0 d0_ref name <span class="dt">None</span> <span class="kw">in</span>
+    return s0)
+  <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; dir_ref&#39; -&gt; name -&gt; ty_return&#39;) = unlink</code></pre>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="co">(* FIXME assumes name doesn&#39;t exist *)</span>
+
+  <span class="kw">let</span> mkdir ops s0 d0_ref name = (
+    <span class="kw">let</span> (s0,(d1_ref,d1)) = ops.new_dir s0 d0_ref name <span class="kw">in</span>
+    <span class="co">(* link d1 into d0 *)</span>
+    <span class="kw">let</span> s0 = internal_link_dir ops s0 d0_ref d1_ref name <span class="kw">in</span> <span class="co">(* FIXME no d1, so d1_ref must already be present after new_dir *)</span>
+    return s0)
+  <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; dir_ref&#39; -&gt; name -&gt; ty_return&#39;) = mkdir</code></pre>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="co">(* FIXME shouldn&#39;t this allow the name to be changed? similarly mvdir *)</span>
+  <span class="co">(* FIXME this should not allow the same file to be moved to itself - the following code deletes the file! also mvdir *)</span>
+  <span class="co">(* FIXME mv -T a.txt d fails if d is a dir, with mv: cannot overwrite directory d with non-directory... even if d is non-empty; but this happens in the user level mv, so may be allowed at syscall? *)</span>
+
+  <span class="kw">let</span> mv ops s0 d0_ref name0 d1_ref name1 = (
+    <span class="kw">let</span> <span class="dt">Some</span>(entry) = ops.resolve1 s0 d0_ref name0 <span class="kw">in</span>
+    <span class="kw">let</span> i0_ref = dest_inode_ref_entry entry <span class="kw">in</span>
+    <span class="kw">let</span> s0 = internal_link_file ops s0 i0_ref d1_ref name1 <span class="kw">in</span>
+    <span class="kw">let</span> s0 = internal_unlink ops s0 d0_ref name0 <span class="kw">in</span> 
+    return s0)
+  <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; dir_ref&#39; -&gt; name -&gt; dir_ref&#39; -&gt; name -&gt; ty_return&#39;) = mv
+</code></pre>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="co">(* FIXME change rm and mvdir linkdir to work with files or dirs *)</span>
+  <span class="co">(* cannot mvdir a b.txt; cannot mvdir a b if b is not empty *)</span>
+  <span class="co">(* FIXME name0 maynot be dir, may not exist FIXME check all uses of dest_dir_ref_entry *)</span>
+  <span class="co">(* note doesn&#39;t check status of name1 - just does the link *)</span>
+  <span class="kw">let</span> mvdir ops s0 d0_ref name0 d1_ref name1 = (
+    <span class="kw">let</span> <span class="dt">Some</span>(entry) = ops.resolve1 s0 d0_ref name0 <span class="kw">in</span>
+    <span class="kw">let</span> d2_ref = dest_dir_ref_entry entry <span class="kw">in</span>
+    <span class="kw">let</span> s0 = internal_link_dir ops s0 d1_ref d2_ref name1 <span class="kw">in</span>
+    <span class="kw">let</span> s0 = internal_unlink ops s0 d0_ref name0 <span class="kw">in</span> 
+    return s0)
+  <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; dir_ref&#39; -&gt; name -&gt; dir_ref&#39; -&gt; name -&gt; ty_return&#39;) = mvdir
+</code></pre>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="co">(* FIXME obviously we need to support writing at points in the file etc *)</span>
+
+  <span class="co">(* FIXME read should not return an option - there is always some data by wellformedness *)</span>
+  <span class="co">(*</span>
+<span class="co">  let read s0 c_ref = (Contents_map.find2 c_ref s0.contents)</span>
+<span class="co">  let (_:ty_impl&#39; -&gt; file_contents_ref -&gt; bytes option) = read</span>
+
+<span class="co">  let read_all s0 (i0_ref,i) = (</span>
+<span class="co">    let c_ref = i.fcontents in</span>
+<span class="co">    let bs = read s0 c_ref in (* FIXME wellformedness? *)</span>
+<span class="co">    bs)</span>
+<span class="co">  let (_:state -&gt; (inode_ref&#39; * inode) -&gt; bytes option) = read_all  </span>
+<span class="co">  *)</span>
+
+  <span class="co">(* FIXME we assume that the bytes are in the map for valid i, don&#39;t need option *)</span>
+  <span class="kw">let</span> read ops s0 i0_ref = (
+    <span class="kw">let</span> <span class="dt">Some</span>(i0) = ops.lookup_inode s0 i0_ref <span class="kw">in</span>
+    <span class="kw">let</span> bytes = ops.get_contents i0 <span class="kw">in</span>
+    {state2=s0; ret2=(<span class="dt">Bytes1</span> bytes)})
+  <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; inode_ref&#39; -&gt; ty_return&#39;) = read</code></pre>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="kw">let</span> readdir ops s0 d0_ref = (
+    <span class="kw">let</span> <span class="dt">Some</span>(d0) = ops.lookup_dir s0 d0_ref <span class="kw">in</span>
+    <span class="kw">let</span> names = ops.get_entries d0 <span class="kw">in</span>
+    <span class="kw">let</span> names = List<span class="kw">.</span>sort Pervasives<span class="kw">.</span>compare names <span class="kw">in</span>
+    {state2=s0; ret2=(<span class="dt">Names1</span> names)})
+  <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; dir_ref&#39; -&gt; ty_return&#39;) = readdir
+</code></pre>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="kw">let</span> rm ops s0 d0_ref name = (unlink ops s0 d0_ref name)
+  <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; dir_ref&#39; -&gt; name -&gt; ty_return&#39;) = rm</code></pre>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="co">(* also works for files *)</span>
+  <span class="kw">let</span> rmdir ops s0 d0_ref name = (unlink ops s0 d0_ref name)
+  <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; dir_ref&#39; -&gt; name -&gt; ty_return&#39;) = rmdir
+</code></pre>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="co">(* FIXME assumes name doesn&#39;t exist; otherwise leave as is FIXME at moment it overwrites *)</span>
+
+  <span class="kw">let</span> touch ops s0 d0_ref name = (
+    <span class="kw">let</span> (s0,(i0_ref,i0)) = ops.new_inode s0 <span class="kw">in</span> 
+    <span class="kw">let</span> s0 = internal_link_file ops s0 i0_ref d0_ref name <span class="kw">in</span> <span class="co">(* i0 must be in s0 already *)</span>
+    return s0)
+  <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; dir_ref&#39; -&gt; name -&gt; ty_return&#39;) = touch</code></pre>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="co">(* FIXME obviously we need to support writing at points in the file etc *)</span>
+  <span class="kw">let</span> write ops s0 i0_ref c = (
+    <span class="kw">let</span> <span class="dt">Some</span>(i0) = ops.lookup_inode s0 i0_ref <span class="kw">in</span>
+    <span class="kw">let</span> i0 = ops.set_contents i0 c <span class="kw">in</span>
+    <span class="kw">let</span> s0 = ops.update_inds_some s0 (i0_ref,i0) <span class="kw">in</span>
+    return s0)
+  <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; inode_ref&#39; -&gt; bytes -&gt; ty_return&#39;) = write</code></pre>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+  <span class="kw">let</span> set_symlink ops s0 i0_ref f = (
+    <span class="kw">let</span> <span class="dt">Some</span>(i0) = ops.lookup_inode s0 i0_ref <span class="kw">in</span>
+    <span class="kw">let</span> i0 = ops.set_symlink i0 f <span class="kw">in</span>
+    <span class="kw">let</span> s0 = ops.update_inds_some s0 (i0_ref,i0) <span class="kw">in</span>
+    return s0)
+  <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; inode_ref&#39; -&gt; <span class="dt">bool</span> -&gt; ty_return&#39;) = set_symlink</code></pre>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+end
+
+
+
+
+</code></pre>
+<h2 id="dir-heap-ops"><a href="#dir-heap-ops">Dir heap ops</a></h2>
+<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
+<span class="co">(* show that dir heap implements the general notion of state *)</span>
+<span class="ot">module</span> Dir_heap_ops = <span class="kw">struct</span>
+
+  <span class="ot">open</span> Fs_types1
+  <span class="ot">open</span> Dir_heap_types
+  <span class="ot">open</span> Fs_ops1
+
+  <span class="kw">let</span> ops = {
+    get_init_state=(<span class="kw">fun</span> () -&gt; state0);
+    get_root=(<span class="kw">fun</span> s0 -&gt; <span class="dt">Some</span> (get_root s0));
+    lookup_dir=lookup_dir;
+    lookup_inode=lookup_inode;
+    update_inds_some=update_inds_some;
+    resolve1=resolve1;
+    update_ents_pointwise=update_ents_pointwise;
+    new_dir=(<span class="kw">fun</span> s0 _d0_ref _name -&gt; new_dir s0);
+    new_inode=new_inode;
+    get_contents=(<span class="kw">fun</span> i0 -&gt; i0.fcontents);
+    set_contents=(<span class="kw">fun</span> i0 -&gt; <span class="kw">fun</span> c -&gt; { i0 <span class="kw">with</span> fcontents=c });
+    get_symlink=(<span class="kw">fun</span> i0 -&gt; i0.is_symlink);
+    set_symlink=(<span class="kw">fun</span> i0 -&gt; <span class="kw">fun</span> b -&gt; { i0 <span class="kw">with</span> is_symlink=b });
+    dest_dir_ref=dest_dir_ref;
+    dest_inode_ref=dest_inode_ref;
+    get_entries=(<span class="kw">fun</span> d0 -&gt; 
+      <span class="kw">let</span> es0 = d0.dentries <span class="kw">in</span>
+      <span class="kw">let</span> binds = Entries<span class="kw">.</span>bindings es0 <span class="kw">in</span>
+      (List<span class="kw">.</span>map fst binds))
+  }
+
+  <span class="kw">let</span> ops1 = {
+    get_init_state1=(<span class="kw">fun</span> () -&gt; state0);
+    get_root1=(<span class="kw">fun</span> s0 -&gt; <span class="dt">Some</span> (get_root s0));
+    dest_dir_ref1=dest_dir_ref;
+    dest_inode_ref1=dest_inode_ref;
+    get_symlink1=(<span class="kw">fun</span> s0 -&gt; <span class="kw">fun</span> i0_ref -&gt; 
+      <span class="kw">let</span> <span class="dt">Some</span>(i0) = ops.lookup_inode s0 i0_ref <span class="kw">in</span>
+      i0.is_symlink);
+    link_file1=(link_file ops);
+    unlink1=(unlink ops);
+    mkdir1=(mkdir ops);
+    mv1=(mv ops);
+    mvdir1=(mvdir ops);
+    read1=(read ops);
+    readdir1=(readdir ops);
+    resolve11=(ops.resolve1);
+    rm1=(rm ops);
+    rmdir1=(rmdir ops);
+    touch1=(touch ops);
+    write1=(write ops);
+    set_symlink1=(set_symlink ops);
+  }
+
+<span class="kw">end</span></code></pre>
+</body>
+</html>
