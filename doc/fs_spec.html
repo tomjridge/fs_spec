@@ -734,10 +734,11 @@ open Fs_spec_everything;;</code></pre>
           maybe_raise <span class="dt">ENOTDIR</span> 
         <span class="kw">else</span> 
           do_nothing) &gt;&gt;= (<span class="kw">fun</span> _ -&gt; 
-        <span class="kw">if</span> ((ops.readdir1 s0 d0_ref).ret2=Names1[]) <span class="kw">then</span> 
-          myraise <span class="dt">EISDIR</span>
+        <span class="kw">if</span> ((ops.readdir1 s0 d0_ref).ret2&lt;&gt;Names1[]) <span class="kw">then</span> 
+          maybe_raise <span class="dt">ENOTEMPTY</span>
         <span class="kw">else</span>
-           myraise <span class="dt">ENOTEMPTY</span>))
+          do_nothing) &gt;&gt;= (<span class="kw">fun</span> _ -&gt;
+        myraise <span class="dt">EISDIR</span>))
       | <span class="dt">Err2</span>(_,_) -&gt; (
         myraise <span class="dt">ENOTDIR</span>))
     | <span class="dt">Dname2</span> (d0_ref,ns_src) -&gt; (
@@ -753,7 +754,12 @@ open Fs_spec_everything;;</code></pre>
             myraise <span class="dt">EINVAL</span>
           <span class="kw">else</span>
             put_state&#39;&#39; (<span class="kw">fun</span> () -&gt; ops.mvdir1 s0 d0_ref (last ns_src.ns2) d1_ref (last ns_dst.ns2))))
-      | <span class="dt">Err2</span> (_,_) -&gt; (myraise <span class="dt">ENOTDIR</span>)
+      | <span class="dt">Err2</span> (_,ns_dst) -&gt; (
+        (<span class="kw">if</span> (resolve_subdir ns_src ns_dst) <span class="kw">then</span>
+          maybe_raise <span class="dt">EINVAL</span> 
+        <span class="kw">else</span> 
+          do_nothing) &gt;&gt;= (<span class="kw">fun</span> _ -&gt; 
+        myraise <span class="dt">ENOTDIR</span>))
       | <span class="dt">Fname2</span> (_,ns_dst) -&gt; (
         <span class="co">(* check rename to subdir before rename to file; NB there are different reasonable options here *)</span>
         (<span class="kw">if</span> (resolve_subdir ns_src ns_dst) <span class="kw">then</span>

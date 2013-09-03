@@ -1715,7 +1715,7 @@ module Fs_ops2 = struct
             myraise EINVAL
           else
             put_state'' (fun () -> ops.mvdir1 s0 d0_ref (last ns_src.ns2) d1_ref (last ns_dst.ns2))))
-      | Err2 (_,_) -> (
+      | Err2 (_,ns_dst) -> (
         (if (resolve_subdir ns_src ns_dst) then
           maybe_raise EINVAL 
         else 

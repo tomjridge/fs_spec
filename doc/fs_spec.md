@@ -723,10 +723,11 @@ module Fs_ops2 = struct
           maybe_raise ENOTDIR 
         else 
           do_nothing) >>= (fun _ -> 
-        if ((ops.readdir1 s0 d0_ref).ret2=Names1[]) then 
-          myraise EISDIR
+        if ((ops.readdir1 s0 d0_ref).ret2<>Names1[]) then 
+          maybe_raise ENOTEMPTY
         else
-           myraise ENOTEMPTY))
+          do_nothing) >>= (fun _ ->
+        myraise EISDIR))
       | Err2(_,_) -> (
         myraise ENOTDIR))
     | Dname2 (d0_ref,ns_src) -> (
@@ -742,7 +743,12 @@ module Fs_ops2 = struct
             myraise EINVAL
           else
             put_state'' (fun () -> ops.mvdir1 s0 d0_ref (last ns_src.ns2) d1_ref (last ns_dst.ns2))))
-      | Err2 (_,_) -> (myraise ENOTDIR)
+      | Err2 (_,ns_dst) -> (
+        (if (resolve_subdir ns_src ns_dst) then
+          maybe_raise EINVAL 
+        else 
+          do_nothing) >>= (fun _ -> 
+        myraise ENOTDIR))
       | Fname2 (_,ns_dst) -> (
         (* check rename to subdir before rename to file; NB there are different reasonable options here *)
         (if (resolve_subdir ns_src ns_dst) then
