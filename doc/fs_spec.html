@@ -168,6 +168,9 @@ open Fs_spec_everything;;</code></pre>
   | <span class="dt">S_LNK</span>                       <span class="co">(** Symbolic link *)</span>
 
 
+  
+
+
   <span class="co">(* top-level labels, intended to mirror the syscalls, but with functional interface; TODO need to incorporate file descriptors, &quot;current position&quot; etc *)</span>
   <span class="kw">type</span> ty_label = 
     | <span class="dt">LINK</span> <span class="kw">of</span> (<span class="dt">string</span> * <span class="dt">string</span>)
@@ -357,24 +360,27 @@ open Fs_spec_everything;;</code></pre>
 
   <span class="co">(* resolve ns, return a (dir_ref,dir); only used with a resolve *)</span>
   <span class="co">(* these seem to be used as shortcuts for looking up parents of a given path; but we want to ensure some invariants in lists of names; on the other hand, given a rname, to resolve the parent we don&#39;t want to have to go via strings *)</span>
-  <span class="kw">let</span> resolve_dir_ref ops s0 ns = (
-    <span class="co">(* sofar is the dir_ref we currently got to; starts off as the root *)</span>
-    <span class="kw">let</span> <span class="kw">rec</span> f1 sofar ns = (<span class="kw">match</span> ns <span class="kw">with</span> 
+  <span class="kw">let</span> <span class="kw">rec</span> resolve_dir_ref_f1 ops s0 sofar ns = (<span class="kw">match</span> ns <span class="kw">with</span> 
       | [] -&gt; (<span class="dt">Some</span> sofar)
       | n::ns -&gt; (
         <span class="kw">let</span> m = ops.resolve11 s0 sofar n <span class="kw">in</span>
         <span class="kw">match</span> m <span class="kw">with</span> | <span class="dt">None</span> -&gt; <span class="dt">None</span> | <span class="dt">Some</span> entry -&gt; 
         <span class="kw">match</span> is_dir_ref_entry entry <span class="kw">with</span> | <span class="kw">false</span> -&gt; <span class="dt">None</span> | <span class="kw">true</span> -&gt;
         <span class="kw">let</span> dir_ref = dest_dir_ref_entry entry <span class="kw">in</span> 
-        f1 dir_ref ns))
-    <span class="kw">in</span>
-    <span class="kw">let</span> <span class="dt">Some</span>(d0_ref) = ops.get_root1 s0 <span class="kw">in</span>
+        resolve_dir_ref_f1 ops s0 dir_ref ns))
+
+  <span class="kw">let</span> resolve_dir_ref ops s0 ns = (
+    <span class="co">(* sofar is the dir_ref we currently got to; starts off as the root *)</span>
+    <span class="co">(* FIXME separate out nested rec defns, so easier to transport to HOL backend *)</span>
+    <span class="kw">let</span> f1 = resolve_dir_ref_f1 ops s0 <span class="kw">in</span>
+    <span class="kw">let</span> d0_ref = dest_Some(ops.get_root1 s0) <span class="kw">in</span> <span class="co">(* FIXME prefer dest_Some to let Some(x) = for HOL backend *)</span>
     f1 d0_ref ns)
   <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; name <span class="dt">list</span> -&gt; dir_ref&#39; <span class="dt">option</span>) = resolve_dir_ref
 
   <span class="co">(* let dir_exists ops s0 ns = (resolve_dir_ref ops s0 ns &lt;&gt; None) *)</span>
 
   <span class="co">(* want to restrict uses of resolve_dir_ref and resolve_inode_ref to this module *)</span>
+  <span class="co">(* FIXME check this is never used on the root directory, or get_parent_dir root = root, or maybe return None *)</span>
   <span class="kw">let</span> get_parent_dir ops s0 nl = (
     resolve_dir_ref ops s0 (butlast nl.ns2))
   <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; ty_name_list2 -&gt; dir_ref&#39; <span class="dt">option</span>) = get_parent_dir
@@ -414,9 +420,9 @@ open Fs_spec_everything;;</code></pre>
   <span class="co">(* FIXME this is only OK if the e.g. d/../x/y/z we have that d exists FIXME do not use! *)</span>
   <span class="kw">let</span> process_dotdot ops s0 nl = (
     <span class="kw">let</span> f1 sofar n = (
-      <span class="kw">if</span> (n=<span class="st">&quot;..&quot;</span> &amp;&amp; sofar &lt;&gt; []) <span class="kw">then</span> 
+      <span class="kw">if</span> ((n=<span class="st">&quot;..&quot;</span>) &amp;&amp; sofar &lt;&gt; []) <span class="kw">then</span> 
         (butlast sofar) 
-      <span class="kw">else</span> <span class="kw">if</span> (n=<span class="st">&quot;..&quot;</span> &amp;&amp; sofar = []) <span class="kw">then</span>
+      <span class="kw">else</span> <span class="kw">if</span> ((n=<span class="st">&quot;..&quot;</span>) &amp;&amp; (sofar = [])) <span class="kw">then</span>
         (failwith <span class="st">&quot;process_dot_dotdot&quot;</span>)
       <span class="kw">else</span>
         (sofar@[n])) 
@@ -622,10 +628,25 @@ open Fs_spec_everything;;</code></pre>
     | <span class="dt">Fname2</span>(i0_ref,ns_src)  -&gt; (
       <span class="kw">match</span> dpath <span class="kw">with</span> 
       | <span class="dt">None2</span> ns_dst -&gt; (
-        <span class="kw">let</span> <span class="dt">Some</span>(d0_ref) = get_parent_dir ops s0 ns_dst <span class="kw">in</span>
-        <span class="kw">let</span> s0 = ops.link_file1 s0 i0_ref d0_ref (last ns_dst.ns2) <span class="kw">in</span>
-        put_state&#39; s0)
+        <span class="kw">match</span> (get_parent_dir ops s0 ns_dst) <span class="kw">with</span> <span class="co">(* FIXME what if ns_dst.ns2 = [] *)</span>
+        | <span class="dt">None</span> -&gt; (myraise <span class="dt">ENOENT</span>)
+        | <span class="dt">Some</span>(d0_ref) -&gt; (
+          <span class="kw">let</span> s0 = ops.link_file1 s0 i0_ref d0_ref (last ns_dst.ns2) <span class="kw">in</span>
+          put_state&#39; s0))
+      | <span class="dt">Err2</span>(_,_) -&gt; (
+        (maybe_raise <span class="dt">EEXIST</span>) &gt;&gt;= <span class="kw">fun</span> _ -&gt; <span class="co">(* arguably linux bug *)</span>
+        myraise <span class="dt">ENOTDIR</span>)
       | _ -&gt; (myraise <span class="dt">EEXIST</span>))
+    | <span class="dt">Dname2</span>(_,_) -&gt; (
+      (<span class="kw">match</span> dpath <span class="kw">with</span>
+        | <span class="dt">None2</span> ns_dst -&gt; (
+          <span class="kw">match</span> (get_parent_dir ops s0 ns_dst) <span class="kw">with</span> <span class="co">(* FIXME what if ns_dst.ns2 = [] *)</span>
+          | <span class="dt">None</span> -&gt; (maybe_raise <span class="dt">ENOENT</span>)
+          | _ -&gt; do_nothing)
+        | <span class="dt">Err2</span> (_,_) -&gt; (maybe_raise <span class="dt">EEXIST</span>)  <span class="co">(* arguably a linux bug - prefer ENOTDIR? *)</span>
+        | _ -&gt; (maybe_raise <span class="dt">EEXIST</span>)) &gt;&gt;= (<span class="kw">fun</span> _ -&gt;
+      myraise <span class="dt">EPERM</span>))
+    | <span class="dt">Err2</span>(_,_) -&gt; (myraise <span class="dt">ENOTDIR</span>)
     | _ -&gt; (myraise <span class="dt">ENOENT</span>))
 
   <span class="kw">let</span> mkdir ops rpath perms = (
@@ -633,9 +654,11 @@ open Fs_spec_everything;;</code></pre>
     get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
     <span class="kw">match</span> rpath <span class="kw">with</span> 
     | <span class="dt">None2</span>(ns) -&gt; (
-      <span class="kw">let</span> <span class="dt">Some</span>(d0_ref) = get_parent_dir ops s0 ns <span class="kw">in</span>
-      <span class="kw">let</span> s0 = ops.mkdir1 s0 d0_ref (last ns.ns2) <span class="kw">in</span>
-      put_state&#39; s0)
+      <span class="kw">match</span> (get_parent_dir ops s0 ns) <span class="kw">with</span> <span class="co">(* FIXME what if ns_dst.ns2 = [] *)</span>
+      | <span class="dt">None</span> -&gt; (myraise <span class="dt">ENOENT</span>)
+      | <span class="dt">Some</span>(d0_ref) -&gt; (
+        <span class="kw">let</span> s0 = ops.mkdir1 s0 d0_ref (last ns.ns2) <span class="kw">in</span>
+        put_state&#39; s0))
     | <span class="dt">Dname2</span>(_,_) -&gt; (myraise <span class="dt">EEXIST</span>)
     | <span class="dt">Fname2</span>(_,_) -&gt; (myraise <span class="dt">EEXIST</span>))
 
@@ -707,7 +730,15 @@ open Fs_spec_everything;;</code></pre>
     get_state &gt;&gt;= (<span class="kw">fun</span> s0 -&gt; 
     <span class="kw">match</span> rsrc <span class="kw">with</span>
     | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* no src file *)</span>
-    | <span class="dt">Err2</span> (_,_) -&gt; (myraise <span class="dt">ENOTDIR</span>)
+    | <span class="dt">Err2</span> (_,_) -&gt; (
+      <span class="co">(* target may have ENOENT path *)</span>
+      (<span class="kw">match</span> rdst <span class="kw">with</span> 
+      | <span class="dt">None2</span> ns_dst -&gt; (
+        <span class="kw">match</span> get_parent_dir ops s0 ns_dst <span class="kw">with</span>
+        | <span class="dt">None</span> -&gt; (maybe_raise <span class="dt">ENOENT</span>) <span class="co">(* parent dir of dst doesn&#39;t exist *)</span>
+        | <span class="dt">Some</span> _ -&gt; do_nothing)
+      | _ -&gt; do_nothing) &gt;&gt;= <span class="kw">fun</span> _ -&gt; (
+      myraise <span class="dt">ENOTDIR</span>))
     | <span class="dt">Fname2</span> (i0_ref,ns_src) -&gt; (
       <span class="kw">match</span> rdst <span class="kw">with</span> 
       | <span class="dt">None2</span> ns_dst -&gt; (
@@ -729,13 +760,12 @@ open Fs_spec_everything;;</code></pre>
         <span class="co">(* FIXME may want to have putstate return a void value *)</span>
       | <span class="dt">Dname2</span> (d0_ref,ns_dst) -&gt; (
         <span class="co">(* several reasonable options *)</span>
-        <span class="co">(* arguably a Linux bug? *)</span>
         (<span class="kw">if</span> (ns_dst.ends_with_slash2) <span class="kw">then</span> 
-          maybe_raise <span class="dt">ENOTDIR</span> 
+          maybe_raise <span class="dt">ENOTDIR</span>         <span class="co">(* arguably a Linux bug? not posix? *)</span>
         <span class="kw">else</span> 
           do_nothing) &gt;&gt;= (<span class="kw">fun</span> _ -&gt; 
         <span class="kw">if</span> ((ops.readdir1 s0 d0_ref).ret2&lt;&gt;Names1[]) <span class="kw">then</span> 
-          maybe_raise <span class="dt">ENOTEMPTY</span>
+          maybe_raise <span class="dt">ENOTEMPTY</span>       <span class="co">(* arguably a Linux bug? not posix? *)</span>
         <span class="kw">else</span>
           do_nothing) &gt;&gt;= (<span class="kw">fun</span> _ -&gt;
         myraise <span class="dt">EISDIR</span>))
@@ -776,7 +806,7 @@ open Fs_spec_everything;;</code></pre>
           (myraise <span class="dt">EINVAL</span>)
         <span class="co">(* FIXME check if dir not empty *)</span>
         <span class="kw">else</span> <span class="kw">if</span> ((ops.readdir1 s0 d1_ref).ret2&lt;&gt;Names1[]) <span class="kw">then</span> 
-          (myraise <span class="dt">ENOTEMPTY</span>) 
+          (myraise <span class="dt">ENOTEMPTY</span>)          <span class="co">(* arguably a Linux bug? not posix? *)</span>
         <span class="co">(* otherwise target dir is empty; do rename; FIXME presumably root, if empty, can&#39;t be target unless src=root *)</span>
         <span class="co">(* FIXME with the unix backend, we really don&#39;t want to execute this last because we know we are going to raise an error; but we must allow for future stages to raise further exceptions *)</span>
         <span class="kw">else</span>
@@ -788,11 +818,13 @@ open Fs_spec_everything;;</code></pre>
   <span class="kw">let</span> rmdir ops rpath = (
     get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
     <span class="kw">match</span> rpath <span class="kw">with</span> 
-    | <span class="dt">Dname2</span>(_,ns) -&gt; (
-      <span class="co">(* FIXME for resolving a file, often useful to have dir ref as well *)</span>
-      <span class="kw">let</span> <span class="dt">Some</span>(d0_ref) = get_parent_dir ops s0 ns <span class="kw">in</span>
-      <span class="kw">let</span> s0 = ops.unlink1 s0 d0_ref (last ns.ns2) <span class="kw">in</span>
-      put_state&#39; s0)
+    | <span class="dt">Dname2</span>(d0_ref,ns) -&gt; (
+      <span class="kw">if</span> ((ops.readdir1 s0 d0_ref).ret2&lt;&gt;Names1[]) <span class="kw">then</span>
+        (myraise <span class="dt">ENOTEMPTY</span>)
+      <span class="kw">else</span>
+        <span class="kw">let</span> <span class="dt">Some</span>(d1_ref) = get_parent_dir ops s0 ns <span class="kw">in</span>
+        <span class="kw">let</span> s0 = ops.unlink1 s0 d1_ref (last ns.ns2) <span class="kw">in</span>
+        put_state&#39; s0)
     | <span class="dt">Fname2</span> _ -&gt; (myraise <span class="dt">ENOTDIR</span>)
     | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>))
 
@@ -874,7 +906,7 @@ open Fs_spec_everything;;</code></pre>
     get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt; 
     <span class="kw">let</span> rsrc = process_path ops s0 src <span class="kw">in</span>
     <span class="kw">let</span> rdst = process_path ops s0 dst <span class="kw">in</span>
-    <span class="kw">if</span> (is_Err2 rsrc || is_Err2 rdst) <span class="kw">then</span> (myraise <span class="dt">ENOTDIR</span>) <span class="kw">else</span> Fs_ops2<span class="kw">.</span>link ops rsrc rdst)
+    Fs_ops2<span class="kw">.</span>link ops rsrc rdst)
 
   <span class="kw">let</span> mkdir ops path perms = (
     get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
@@ -1003,15 +1035,20 @@ open Fs_spec_everything;;</code></pre>
     <span class="kw">let</span> rs = List<span class="kw">.</span>map f1 rs <span class="kw">in</span>
     rs)
   <span class="kw">let</span> (_:ty_ops&#39; -&gt; state&#39; -&gt; ty_label -&gt; (state&#39; * (error,ret_value)sum) finset) = trans
+
+  <span class="co">(* convenience method to process a label; always choose first possible result (state,e+v) *)</span>
+  <span class="kw">let</span> process_label ops s0 lbl = (
+    <span class="kw">let</span> rs = trans ops s0 lbl <span class="kw">in</span>
+    <span class="kw">let</span> _ = <span class="kw">if</span> rs = finset_empty <span class="kw">then</span> failwith <span class="st">&quot;process_label: no result state&quot;</span> <span class="kw">else</span> () <span class="kw">in</span>
+    <span class="kw">let</span> (s&#39;,v) = finset_choose rs <span class="kw">in</span>
+    (s&#39;,v))
   
-  <span class="co">(* convenience method to process a list of labels; always choose first possible result (state,e+v) *)</span>
+  <span class="co">(* convenience method to process a list of labels *)</span>
   <span class="kw">let</span> process_labels ops s0 lbls = (
     <span class="kw">let</span> f1 = (<span class="kw">fun</span> xs -&gt; <span class="kw">fun</span> lbl -&gt; 
       <span class="kw">let</span> l = last xs <span class="kw">in</span>
       <span class="kw">let</span> (_,_,(s,_)) = l <span class="kw">in</span>
-      <span class="kw">let</span> rs = trans ops s lbl <span class="kw">in</span>
-      <span class="kw">let</span> _ = <span class="kw">if</span> rs = finset_empty <span class="kw">then</span> failwith <span class="st">&quot;process_labels: no result state&quot;</span> <span class="kw">else</span> () <span class="kw">in</span>
-      <span class="kw">let</span> (s&#39;,v) = finset_choose rs <span class="kw">in</span>
+      <span class="kw">let</span> (s&#39;,v) = process_label ops s lbl <span class="kw">in</span>
       xs@[(List<span class="kw">.</span>length xs,lbl,(s&#39;,v))])
     <span class="kw">in</span>
     <span class="kw">let</span> dummy_lbl = <span class="dt">LINK</span>(<span class="st">&quot;dummy lbl&quot;</span>,<span class="st">&quot;dummy lbl&quot;</span>) <span class="kw">in</span>

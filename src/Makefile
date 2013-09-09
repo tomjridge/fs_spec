@@ -62,6 +62,12 @@ unix_impl.native: unix_impl.ml fs_spec.ml fs_prelude.ml
 	ocamlbuild -libs unix,bigarray $@
 
 
+fs_spec.hol.tmp: fs_spec.ml FORCE
+	chmod u+w $@
+	cp $< $@
+	sed -i -e "s/^\(module.*\)/(* \1 *)/g" $@
+	sed -i -e "s/^\( *open .*\)/(* \1 *)/g" $@
+
 ################################################################################
 # ml targets
 

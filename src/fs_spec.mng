@@ -4,21 +4,12 @@ want to write a script to dump a complete filesystem using shasum
 
 want to implement same for ocaml fs
 
-want to write another script to alpha convert this output (to get a canonical repn of the equiv classes)
-
-want to implement an interface to a mounted fuse filesystem that allows to directly execute calls against the filesystem; ideally this would be via a normal shell script so that when testing existing filesystems we execute eg
-
-    posix touch /tmp/tmp.txt
-
-and this calls the posix call, unless we are on the ocaml fs, in which case it directly executes this call against the filesystem; this is to circumvent all the fuse/vfs cruft that might be obscuring bugs in the spec. actually this could just be two separate scripts - one for ocamlfs, and one for normal fs; for the ocamlfs, how to call directly into the filesystem? probably easiest is to write to a control file in the ocamlfs (/.INTERNAL say, which isn't listed but can be stat'ed) the label, which is then executed
-
-need concrete representation for posix calls (independent of labels); maybe a function to convert a concrete repn into a label
+want to write another script to alpha convert this output (to get a canonical repn of the equiv classes); actually this should be part of dumpfs
 
 @ignore
 Hi-lock: (("^@.*" (0 (quote hi-blue-b) t)))
 Hi-lock: (("^#+.*" (0 (quote hi-green-b) t)))
 
-@old fs_spec.md
 @fs_spec.md
 # Interactive top-level directives
 
@@ -34,43 +25,6 @@ Via findlib:
     open Fs_prelude;;
     open Fs_spec;;
     open Fs_spec_everything;;
-
-@old? # Interactive top-level directives
-
-In bash, before running toplevel, or executing native code, the following may improve performance (but is not necessary):
-
-    # from http://caml.inria.fr/pub/docs/manual-ocaml-4.00/manual024.html
-    export OCAMLRUNPARAM="s=8M,l=8M,i=1M"
-
-Then start the ocaml toplevel interpreter:
-
-    ocaml unix.cma bigarray.cma str.cma
-
-And type the following to load the `fs_spec.ml` file:
-
-    #cd "/tmp/l/general/research/fs/src";;
-    #use "fs_spec.toplevel.ml";;
-
-(Internal) To include parsing stuff, you can also
-
-    #cd "/tmp/l/general/research/parsing/src";;
-    #use "parse_lib.toplevel.ml";;
-
-
-(Internal) To load opsparser stuff:
-
-    #cd "/tmp/l/general/research/fs/src";;
-    #use "opsparser.toplevel.ml";;
-
-Seems difficult (impossible?) to use fuse in a toplevel. eg typical error:
-
-    # Cannot load required shared library dllFuse_stubs.
-    Reason: /tmp/l/bin/ocaml-3.12.1/lib/ocaml/site-packages/ocamlfuse/dllFuse_stubs.so: /tmp/l/bin/ocaml-3.12.1/lib/ocaml/site-packages/ocamlfuse/dllFuse_stubs.so: undefined symbol: camlidl_malloc_string.
-
---
-
-
-
 
 @tasks issues fs_spec.md
 # Tasks
@@ -1103,6 +1057,9 @@ module Fs_types1 = struct
   | S_LNK                       (** Symbolic link *)
 
 
+  
+
+
   (* top-level labels, intended to mirror the syscalls, but with functional interface; TODO need to incorporate file descriptors, "current position" etc *)
   type ty_label = 
     | LINK of (string * string)
@@ -1295,24 +1252,27 @@ module Resolve = struct
 
   (* resolve ns, return a (dir_ref,dir); only used with a resolve *)
   (* these seem to be used as shortcuts for looking up parents of a given path; but we want to ensure some invariants in lists of names; on the other hand, given a rname, to resolve the parent we don't want to have to go via strings *)
-  let resolve_dir_ref ops s0 ns = (
-    (* sofar is the dir_ref we currently got to; starts off as the root *)
-    let rec f1 sofar ns = (match ns with 
+  let rec resolve_dir_ref_f1 ops s0 sofar ns = (match ns with 
       | [] -> (Some sofar)
       | n::ns -> (
         let m = ops.resolve11 s0 sofar n in
         match m with | None -> None | Some entry -> 
         match is_dir_ref_entry entry with | false -> None | true ->
         let dir_ref = dest_dir_ref_entry entry in 
-        f1 dir_ref ns))
-    in
-    let Some(d0_ref) = ops.get_root1 s0 in
+        resolve_dir_ref_f1 ops s0 dir_ref ns))
+
+  let resolve_dir_ref ops s0 ns = (
+    (* sofar is the dir_ref we currently got to; starts off as the root *)
+    (* FIXME separate out nested rec defns, so easier to transport to HOL backend *)
+    let f1 = resolve_dir_ref_f1 ops s0 in
+    let d0_ref = dest_Some(ops.get_root1 s0) in (* FIXME prefer dest_Some to let Some(x) = for HOL backend *)
     f1 d0_ref ns)
   let (_:ty_ops' -> ty_impl' -> name list -> dir_ref' option) = resolve_dir_ref
 
   (* let dir_exists ops s0 ns = (resolve_dir_ref ops s0 ns <> None) *)
 
   (* want to restrict uses of resolve_dir_ref and resolve_inode_ref to this module *)
+  (* FIXME check this is never used on the root directory, or get_parent_dir root = root, or maybe return None *)
   let get_parent_dir ops s0 nl = (
     resolve_dir_ref ops s0 (butlast nl.ns2))
   let (_:ty_ops' -> ty_impl' -> ty_name_list2 -> dir_ref' option) = get_parent_dir
@@ -1352,9 +1312,9 @@ module Resolve = struct
   (* FIXME this is only OK if the e.g. d/../x/y/z we have that d exists FIXME do not use! *)
   let process_dotdot ops s0 nl = (
     let f1 sofar n = (
-      if (n=".." && sofar <> []) then 
+      if ((n="..") && sofar <> []) then 
         (butlast sofar) 
-      else if (n=".." && sofar = []) then
+      else if ((n="..") && (sofar = [])) then
         (failwith "process_dot_dotdot")
       else
         (sofar@[n])) 
@@ -1583,10 +1543,25 @@ module Fs_ops2 = struct
     | Fname2(i0_ref,ns_src)  -> (
       match dpath with 
       | None2 ns_dst -> (
-        let Some(d0_ref) = get_parent_dir ops s0 ns_dst in
-        let s0 = ops.link_file1 s0 i0_ref d0_ref (last ns_dst.ns2) in
-        put_state' s0)
+        match (get_parent_dir ops s0 ns_dst) with (* FIXME what if ns_dst.ns2 = [] *)
+        | None -> (myraise ENOENT)
+        | Some(d0_ref) -> (
+          let s0 = ops.link_file1 s0 i0_ref d0_ref (last ns_dst.ns2) in
+          put_state' s0))
+      | Err2(_,_) -> (
+        (maybe_raise EEXIST) >>= fun _ -> (* arguably linux bug *)
+        myraise ENOTDIR)
       | _ -> (myraise EEXIST))
+    | Dname2(_,_) -> (
+      (match dpath with
+        | None2 ns_dst -> (
+          match (get_parent_dir ops s0 ns_dst) with (* FIXME what if ns_dst.ns2 = [] *)
+          | None -> (maybe_raise ENOENT)
+          | _ -> do_nothing)
+        | Err2 (_,_) -> (maybe_raise EEXIST)  (* arguably a linux bug - prefer ENOTDIR? *)
+        | _ -> (maybe_raise EEXIST)) >>= (fun _ ->
+      myraise EPERM))
+    | Err2(_,_) -> (myraise ENOTDIR)
     | _ -> (myraise ENOENT))
 
   let mkdir ops rpath perms = (
@@ -1594,9 +1569,11 @@ module Fs_ops2 = struct
     get_state >>= fun s0 ->
     match rpath with 
     | None2(ns) -> (
-      let Some(d0_ref) = get_parent_dir ops s0 ns in
-      let s0 = ops.mkdir1 s0 d0_ref (last ns.ns2) in
-      put_state' s0)
+      match (get_parent_dir ops s0 ns) with (* FIXME what if ns_dst.ns2 = [] *)
+      | None -> (myraise ENOENT)
+      | Some(d0_ref) -> (
+        let s0 = ops.mkdir1 s0 d0_ref (last ns.ns2) in
+        put_state' s0))
     | Dname2(_,_) -> (myraise EEXIST)
     | Fname2(_,_) -> (myraise EEXIST))
 
@@ -1668,7 +1645,15 @@ module Fs_ops2 = struct
     get_state >>= (fun s0 -> 
     match rsrc with
     | None2 _ -> (myraise ENOENT) (* no src file *)
-    | Err2 (_,_) -> (myraise ENOTDIR)
+    | Err2 (_,_) -> (
+      (* target may have ENOENT path *)
+      (match rdst with 
+      | None2 ns_dst -> (
+        match get_parent_dir ops s0 ns_dst with
+        | None -> (maybe_raise ENOENT) (* parent dir of dst doesn't exist *)
+        | Some _ -> do_nothing)
+      | _ -> do_nothing) >>= fun _ -> (
+      myraise ENOTDIR))
     | Fname2 (i0_ref,ns_src) -> (
       match rdst with 
       | None2 ns_dst -> (
@@ -1690,13 +1675,12 @@ module Fs_ops2 = struct
         (* FIXME may want to have putstate return a void value *)
       | Dname2 (d0_ref,ns_dst) -> (
         (* several reasonable options *)
-        (* arguably a Linux bug? *)
         (if (ns_dst.ends_with_slash2) then 
-          maybe_raise ENOTDIR 
+          maybe_raise ENOTDIR         (* arguably a Linux bug? not posix? *)
         else 
           do_nothing) >>= (fun _ -> 
         if ((ops.readdir1 s0 d0_ref).ret2<>Names1[]) then 
-          maybe_raise ENOTEMPTY
+          maybe_raise ENOTEMPTY       (* arguably a Linux bug? not posix? *)
         else
           do_nothing) >>= (fun _ ->
         myraise EISDIR))
@@ -1737,7 +1721,7 @@ module Fs_ops2 = struct
           (myraise EINVAL)
         (* FIXME check if dir not empty *)
         else if ((ops.readdir1 s0 d1_ref).ret2<>Names1[]) then 
-          (myraise ENOTEMPTY) 
+          (myraise ENOTEMPTY)          (* arguably a Linux bug? not posix? *)
         (* otherwise target dir is empty; do rename; FIXME presumably root, if empty, can't be target unless src=root *)
         (* FIXME with the unix backend, we really don't want to execute this last because we know we are going to raise an error; but we must allow for future stages to raise further exceptions *)
         else
@@ -1749,11 +1733,13 @@ module Fs_ops2 = struct
   let rmdir ops rpath = (
     get_state >>= fun s0 ->
     match rpath with 
-    | Dname2(_,ns) -> (
-      (* FIXME for resolving a file, often useful to have dir ref as well *)
-      let Some(d0_ref) = get_parent_dir ops s0 ns in
-      let s0 = ops.unlink1 s0 d0_ref (last ns.ns2) in
-      put_state' s0)
+    | Dname2(d0_ref,ns) -> (
+      if ((ops.readdir1 s0 d0_ref).ret2<>Names1[]) then
+        (myraise ENOTEMPTY)
+      else
+        let Some(d1_ref) = get_parent_dir ops s0 ns in
+        let s0 = ops.unlink1 s0 d1_ref (last ns.ns2) in
+        put_state' s0)
     | Fname2 _ -> (myraise ENOTDIR)
     | None2 _ -> (myraise ENOENT))
 
@@ -1840,7 +1826,7 @@ module Fs_ops3 = struct
     get_state >>= fun s0 -> 
     let rsrc = process_path ops s0 src in
     let rdst = process_path ops s0 dst in
-    if (is_Err2 rsrc || is_Err2 rdst) then (myraise ENOTDIR) else Fs_ops2.link ops rsrc rdst)
+    Fs_ops2.link ops rsrc rdst)
 
   let mkdir ops path perms = (
     get_state >>= fun s0 ->
@@ -1977,15 +1963,20 @@ module Transition_system = struct
     let rs = List.map f1 rs in
     rs)
   let (_:ty_ops' -> state' -> ty_label -> (state' * (error,ret_value)sum) finset) = trans
+
+  (* convenience method to process a label; always choose first possible result (state,e+v) *)
+  let process_label ops s0 lbl = (
+    let rs = trans ops s0 lbl in
+    let _ = if rs = finset_empty then failwith "process_label: no result state" else () in
+    let (s',v) = finset_choose rs in
+    (s',v))
   
-  (* convenience method to process a list of labels; always choose first possible result (state,e+v) *)
+  (* convenience method to process a list of labels *)
   let process_labels ops s0 lbls = (
     let f1 = (fun xs -> fun lbl -> 
       let l = last xs in
       let (_,_,(s,_)) = l in
-      let rs = trans ops s lbl in
-      let _ = if rs = finset_empty then failwith "process_labels: no result state" else () in
-      let (s',v) = finset_choose rs in
+      let (s',v) = process_label ops s lbl in
       xs@[(List.length xs,lbl,(s',v))])
     in
     let dummy_lbl = LINK("dummy lbl","dummy lbl") in
@@ -2152,10 +2143,13 @@ module Extra_ops = struct
   open Prelude
   open Fs_types1
 
+  let process_label = Transition_system.process_label
+
 (*
   let kind_of_inode ops s0 i0 = (
     if (ops.get_symlink i0) then S_LNK else S_REG)
 *)
+
 
   let kind_of_inode_ref ops s0 i0_ref = (
       if (ops.get_symlink1 s0 i0_ref) then S_LNK else S_REG)
@@ -2195,10 +2189,20 @@ module Extra_ops = struct
     let xs' = List.concat (List.map (find_path ops s0) ds) in
     xs@xs')
 
+  let read_all ops s0 p = (
+    let (_,Inr(Stats1(s))) = process_label ops s0 (STAT p) in
+    let len = s.Unix.LargeFile.st_size in
+    let (_,Inr(Bytes1 bs)) = process_label ops s0 (READ(p,0,(* FIXME *)Int64.to_int len)) in
+    bs)
+
+  let inode_of_path ops s0 p = (
+    let (_,Inr(Stats1(s))) = process_label ops s0 (STAT p) in
+    s.Unix.LargeFile.st_ino)
+
 end
 
 
-(* FIXME shouldn't this work with ops? *)
+(* FIXME shouldn't this work with ops? *) (* FIXME try and remove this *)
 module File_utils2 = struct 
 
   open Unix
@@ -2230,7 +2234,7 @@ module File_utils2 = struct
 
 end
 
-(* FIXME shouldn't this work with ops? *)
+(* FIXME shouldn't this work with ops? *) (* FIXME try and remove this *)
 module Unix_utils = struct
 
   open File_utils2
@@ -2286,12 +2290,12 @@ end
 
 (* interactive:
 
-    #use "/tmp/l/general/research/parsing/src/p3_lib.toplevel.ml";;
-    #use "/tmp/l/general/research/parsing/src/mycsv.toplevel.ml";;
+    #use "local_resources/p3_lib.toplevel.ml";;
+    #use "local_resources/mycsv.toplevel.ml";;
 
 *)
 
-(* FIXME shouldn't this work with ops? *)
+(* FIXME shouldn't this work with ops? *) (* FIXME try and remove this *)
 module Unix_dump_fs = struct
 
   open Unix
@@ -2333,144 +2337,79 @@ module Unix_dump_fs = struct
 
 end
 
-(*
+
 module Dump_fs = struct
 
-  open File_utils
-  open Mycsv
+  open Prelude
+  open Fs_types1
   open Sha1
  
   let sha1_of_string s = Sha1.to_hex (Sha1.string s)
 
-  let rec find ops s0 d = 
-    let es = ops.get_entries s d in
-    let ds = List.filter (is_dir ops s) ss in
-    (List.concat (List.map (find ops s) ds))@ss (* order: want leaves first *)
+  (* sha1 of contents of file *)
+  let sha1_of_path ops s0 p = (
+    let bs = Extra_ops.read_all ops s0 p in
+    let s = MyDynArray.to_string bs in
+    sha1_of_string s)
 
+  let find = Extra_ops.find_path
+  let kind = Extra_ops.kind_of_path
+  let inode_of_path = Extra_ops.inode_of_path
+
+  (* we need to maintain a map of inodes that we have already seen, so we can update them as we go; we maintain a counter c from 1, and insert (inode,c++) into map when meeting new inode *)
+  (* note this ordering is sensitive to the order of the paths ps! *)
+  let get_normalized_inodes ops s0 ps = (
+    let f1 (c,m,sofar) p = (
+      (* check whether p's inode has already been seen *)
+      let i = inode_of_path ops s0 p in
+      match (fmap_lookup m i) with
+      | None -> (
+        let m' = fmap_update m (i,c) in
+        (c+1,m',fmap_update sofar (p,c)))
+      | Some i' -> (
+        (c,m,fmap_update sofar (p,i'))))
+    in
+    let (_,_,ips) = List.fold_left f1 (1,fmap_empty,fmap_empty) ps in
+    ips)
 
   let records_of_path ops s0 s = (
-    let p = path_of_string s in
-    let fs = find p in
-    let f1 f = (
-      let s = string_of_path f in
-      let k = kind f in
+    let ps = find ops s0 s in
+    let fps = List.filter (fun p -> Extra_ops.kind_of_path ops s0 p = S_REG) ps in
+    let inodes_map = get_normalized_inodes ops s0 fps in
+    let f1 p = (
+      let k = kind ops s0 p in
       match k with 
-      | S_REG -> [s;"F";(string_of_int (inode f));(sha1_of_file s)]
-      | S_DIR -> [s;"D"]
-      | S_LNK -> [s;"L";(readlink f)]
+      | S_REG -> [p;"F";(string_of_int (dest_Some (fmap_lookup inodes_map p)));(sha1_of_path ops s0 p)]
+      | S_DIR -> [p;"D"]
+      | S_LNK -> [p;"L";(MyDynArray.to_string (Extra_ops.read_all ops s0 p))]
       | _ -> failwith "main")
     in
-    let ss = List.map f1 fs in
+    let ss = List.map f1 ps in
     ss)
 
+  (* convert to csv data *)
+  let dump_of_path ops s0 p = (
+    let open Mycsv in
+    let rs = records_of_path ops s0 p in
+    let params = { sep="|"; outsep="|"; newline="\n"; dquote="\"" } in
+    let s = String.concat "" (List.map (format params None1 rs) rs) in
+    s)
+
+
 (*
-  let fs = find ["tmp";"a"]
-  let fs = List.filter is_file fs 
-  let _ = List.map (fun f -> (string_of_path f,inode_of_file f, sha1_of_file (string_of_path f))) fs
 
-  let _ = sha1_of_file "/mnt/sda7/tom/downloads/ubuntu/xubuntu-12.04.2-desktop-i386.iso"
-
-  let fs = find ["tmp"]
-
-  let _ = sha1_of_file "/tmp/a/tom.txt"
-  let _ = sha1_of_file "/tmp/a/jen.txt"
+  #use "unix_impl.toplevel.ml";;
+  let ops = Unix_impl.Unix_impl_everything.ops1
+  let s0 = Unix_impl.Unix_impl_everything.state0
+  let _ = records_of_path ops s0 "/"
+  let _ = print_endline(dump_of_path ops s0 "/")
+ 
 *)
 
 end
 
-*)
-
 
 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-@FIXME move? fs_spec.md
-## TODO Ops printer
-
-We want to print filesystem operations as plain text, so that we can replay them easily. Particularly, we want to replay the writes.
-
-Problem with doing this in ocaml is that we can't easily reconstruct partial disk images just using the command line. There is a command line tool base64 on linux, which looks good. 
-
-Batteries included has a Base64 module with the right methods for encode and decode. Need to check that this is in sync with the linux base64 implementation. This needs BatIO module.
-
-Could probably take this module and write our own. The slightly tricky bit is if the input isn't a multiple of 8 bytes. The code in the bat module is quite tricky here.
-
-
-
-@FIXME move? fs_spec.md
-# Operations parser
-
-We implement a parser that can take a sequence of instructions (separated by ws) and generate caml code for those ops.
-
-See ../src/p3pre.ml ../src/p3mid.ml and ../src/p3post.ml
-
-The real parser is bound to RealOpsParser
-
-Note that we demand that dirnames end in a '/', and filenames do not end in a '/'.
-
-<div style='background-color:#CCFFCC'>
-@FIXME move? opsparser.g
-{{ 
-
-(* a parser for operations *)
-
-open RawParsers
-
-let id x = x
-let c s = content s
-
-let myparse_comm = fun i -> (((a "(*") **>@ until_a "*)" **>@ (a "*)")) >>@ (fun (x,(y,z)) -> dest_Some (concatenate_list [x;y;z]))) i
-
-let rec myparse_wscomm = fun i -> ((parse_epsws)
-   |||@ ((parse_epsws **>@ myparse_comm **>@ myparse_wscomm) >>@ (fun (x,(y,z)) -> dest_Some (concatenate_list [x;y;z] )))) i
-
-let parse_bytes = parse_while (fun s -> not (s="\""))
-
-let name = (parse_while (fun s -> not (s=" " || s="/" || s="\n" )))
-
-let term_to_parser s = (match s with 
-  | "?w?" -> (myparse_wscomm)
-  | "?bytes?" -> parse_bytes
-  | "?name?" -> name
-  | _ -> (RawParsers.term_to_parser s))
-
-open Fs_types1
-
-}}
-
-OPS -> OP                                    {{ fun x -> [x] }}                                       
-  | OP ?w? OPS                               {{ fun (x,(_,xs)) -> x::xs }}                            
-                                             
-OP ->                              
-    "ln" ?w? FILENAME ?w? DIRNAME ?w? NAME {{ fun (_,(_,(fn,(_,(dn,(_,n)))))) -> LN(fn,dn,n) }}      
-  | "unlink" ?w? DIRNAME ?w? NAME              {{ fun (_,(_,(dn,(_,n)))) -> UNLINK(dn,n) }}             
-  | "mkdir" ?w? DIRNAME ?w? NAME             {{ fun (_,(_,(dn,(_,n)))) -> MKDIR(dn,n) }}              
-  | "rmdir" ?w? DIRNAME ?w? NAME             {{ fun (_,(_,(dn,(_,n)))) -> RMDIR(dn,n) }}              
-  | "touch" ?w? DIRNAME ?w? NAME             {{ fun (_,(_,(dn,(_,n)))) -> TOUCH(dn,n) }}              
-  | "rm" ?w? DIRNAME ?w? NAME                {{ fun (_,(_,(dn,(_,n)))) -> RM(dn,n) }}                 
-  | "mvdir" ?w? DIRNAME ?w? NAME ?w? DIRNAME ?w? NAME {{ fun (_,(_,(dn1,(_,(n1,(_,(dn2,(_,n2)))))))) -> MVDIR(dn1,n1,dn2,n2) }}
-  | "mv" ?w? DIRNAME ?w? NAME ?w? DIRNAME ?w? NAME  {{ fun (_,(_,(dn1,(_,(n1,(_,(dn2,(_,n2)))))))) -> MV(dn1,n1,dn2,n2) }}   
-  | "cp" ?w? FILENAME ?w? DIRNAME ?w? NAME   {{ fun (_,(_,(fn,(_,(dn,(_,n)))))) -> CP(fn,dn,n) }}     
-  | "cpdir" ?w? DIRNAME ?w? DIRNAME ?w? NAME {{ fun (_,(_,(fn,(_,(dn,(_,n)))))) -> CPDIR(fn,dn,n) }}  
-  | "write" ?w? FILENAME ?w? BYTES {{ fun (w,(_,(fn,(_,bs)))) -> WRITE(fn,bs) }}
-  | "write64" ?w? FILENAME ?w? ?num? ?w? BYTES {{ fun (w,(_,(fn,(_,(off,(_,bs)))))) -> WRITE64(fn,int_of_string (content off),bs) }}
-                                             
-NAME -> ?name?                               {{ c }}                                                  
-
-(* we force DIRNAME to end with a /, to distinguish it from a filename; obviously normal shells don't do this! BEWARE *)
-
-DIRNAME -> "/"                   {{ fun _ -> [] }}            
-  | "/" NAMEPLUS "/"             {{ fun (_,(ns,_)) -> ns }}       
-
-NAMEPLUS -> NAME                 {{ fun x -> [x] }}           
-  | NAME "/" NAMEPLUS            {{ fun (x,(_,xs)) -> x::xs }}
-
-(* FILENAME doesn't end in a / *)
-FILENAME -> "/" NAMEPLUS         {{ fun (_,ns) -> ns }}       
-
-BYTES -> '"' ?bytes? '"'  {{ fun (_,(s,_)) -> c s }}
-
-@FIXME move? fs_spec.md
-</div>
-
 @ignore
 # Local variables
 

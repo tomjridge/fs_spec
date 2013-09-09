@@ -14,10 +14,13 @@ module Extra_ops = struct
   open Prelude
   open Fs_types1
 
+  let process_label = Transition_system.process_label
+
 (*
   let kind_of_inode ops s0 i0 = (
     if (ops.get_symlink i0) then S_LNK else S_REG)
 *)
+
 
   let kind_of_inode_ref ops s0 i0_ref = (
       if (ops.get_symlink1 s0 i0_ref) then S_LNK else S_REG)
@@ -57,10 +60,20 @@ module Extra_ops = struct
     let xs' = List.concat (List.map (find_path ops s0) ds) in
     xs@xs')
 
+  let read_all ops s0 p = (
+    let (_,Inr(Stats1(s))) = process_label ops s0 (STAT p) in
+    let len = s.Unix.LargeFile.st_size in
+    let (_,Inr(Bytes1 bs)) = process_label ops s0 (READ(p,0,(* FIXME *)Int64.to_int len)) in
+    bs)
+
+  let inode_of_path ops s0 p = (
+    let (_,Inr(Stats1(s))) = process_label ops s0 (STAT p) in
+    s.Unix.LargeFile.st_ino)
+
 end
 
 
-(* FIXME shouldn't this work with ops? *)
+(* FIXME shouldn't this work with ops? *) (* FIXME try and remove this *)
 module File_utils2 = struct 
 
   open Unix
@@ -92,7 +105,7 @@ module File_utils2 = struct
 
 end
 
-(* FIXME shouldn't this work with ops? *)
+(* FIXME shouldn't this work with ops? *) (* FIXME try and remove this *)
 module Unix_utils = struct
 
   open File_utils2
@@ -148,12 +161,12 @@ end
 
 (* interactive:
 
-    #use "/tmp/l/general/research/parsing/src/p3_lib.toplevel.ml";;
-    #use "/tmp/l/general/research/parsing/src/mycsv.toplevel.ml";;
+    #use "local_resources/p3_lib.toplevel.ml";;
+    #use "local_resources/mycsv.toplevel.ml";;
 
 *)
 
-(* FIXME shouldn't this work with ops? *)
+(* FIXME shouldn't this work with ops? *) (* FIXME try and remove this *)
 module Unix_dump_fs = struct
 
   open Unix
@@ -195,52 +208,76 @@ module Unix_dump_fs = struct
 
 end
 
-(*
+
 module Dump_fs = struct
 
-  open File_utils
-  open Mycsv
+  open Prelude
+  open Fs_types1
   open Sha1
  
   let sha1_of_string s = Sha1.to_hex (Sha1.string s)
 
-  let rec find ops s0 d = 
-    let es = ops.get_entries s d in
-    let ds = List.filter (is_dir ops s) ss in
-    (List.concat (List.map (find ops s) ds))@ss (* order: want leaves first *)
+  (* sha1 of contents of file *)
+  let sha1_of_path ops s0 p = (
+    let bs = Extra_ops.read_all ops s0 p in
+    let s = MyDynArray.to_string bs in
+    sha1_of_string s)
 
+  let find = Extra_ops.find_path
+  let kind = Extra_ops.kind_of_path
+  let inode_of_path = Extra_ops.inode_of_path
+
+  (* we need to maintain a map of inodes that we have already seen, so we can update them as we go; we maintain a counter c from 1, and insert (inode,c++) into map when meeting new inode *)
+  (* note this ordering is sensitive to the order of the paths ps! *)
+  let get_normalized_inodes ops s0 ps = (
+    let f1 (c,m,sofar) p = (
+      (* check whether p's inode has already been seen *)
+      let i = inode_of_path ops s0 p in
+      match (fmap_lookup m i) with
+      | None -> (
+        let m' = fmap_update m (i,c) in
+        (c+1,m',fmap_update sofar (p,c)))
+      | Some i' -> (
+        (c,m,fmap_update sofar (p,i'))))
+    in
+    let (_,_,ips) = List.fold_left f1 (1,fmap_empty,fmap_empty) ps in
+    ips)
 
   let records_of_path ops s0 s = (
-    let p = path_of_string s in
-    let fs = find p in
-    let f1 f = (
-      let s = string_of_path f in
-      let k = kind f in
+    let ps = find ops s0 s in
+    let fps = List.filter (fun p -> Extra_ops.kind_of_path ops s0 p = S_REG) ps in
+    let inodes_map = get_normalized_inodes ops s0 fps in
+    let f1 p = (
+      let k = kind ops s0 p in
       match k with 
-      | S_REG -> [s;"F";(string_of_int (inode f));(sha1_of_file s)]
-      | S_DIR -> [s;"D"]
-      | S_LNK -> [s;"L";(readlink f)]
+      | S_REG -> [p;"F";(string_of_int (dest_Some (fmap_lookup inodes_map p)));(sha1_of_path ops s0 p)]
+      | S_DIR -> [p;"D"]
+      | S_LNK -> [p;"L";(MyDynArray.to_string (Extra_ops.read_all ops s0 p))]
       | _ -> failwith "main")
     in
-    let ss = List.map f1 fs in
+    let ss = List.map f1 ps in
     ss)
 
+  (* convert to csv data *)
+  let dump_of_path ops s0 p = (
+    let open Mycsv in
+    let rs = records_of_path ops s0 p in
+    let params = { sep="|"; outsep="|"; newline="\n"; dquote="\"" } in
+    let s = String.concat "" (List.map (format params None1 rs) rs) in
+    s)
+
+
 (*
-  let fs = find ["tmp";"a"]
-  let fs = List.filter is_file fs 
-  let _ = List.map (fun f -> (string_of_path f,inode_of_file f, sha1_of_file (string_of_path f))) fs
 
-  let _ = sha1_of_file "/mnt/sda7/tom/downloads/ubuntu/xubuntu-12.04.2-desktop-i386.iso"
-
-  let fs = find ["tmp"]
-
-  let _ = sha1_of_file "/tmp/a/tom.txt"
-  let _ = sha1_of_file "/tmp/a/jen.txt"
+  #use "unix_impl.toplevel.ml";;
+  let ops = Unix_impl.Unix_impl_everything.ops1
+  let s0 = Unix_impl.Unix_impl_everything.state0
+  let _ = records_of_path ops s0 "/"
+  let _ = print_endline(dump_of_path ops s0 "/")
+ 
 *)
 
 end
-
-*)
 
 
  end

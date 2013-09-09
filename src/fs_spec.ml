@@ -134,6 +134,9 @@ module Fs_types1 = struct
   | S_LNK                       (** Symbolic link *)
 
 
+  
+
+
   (* top-level labels, intended to mirror the syscalls, but with functional interface; TODO need to incorporate file descriptors, "current position" etc *)
   type ty_label = 
     | LINK of (string * string)
@@ -326,24 +329,27 @@ module Resolve = struct
 
   (* resolve ns, return a (dir_ref,dir); only used with a resolve *)
   (* these seem to be used as shortcuts for looking up parents of a given path; but we want to ensure some invariants in lists of names; on the other hand, given a rname, to resolve the parent we don't want to have to go via strings *)
-  let resolve_dir_ref ops s0 ns = (
-    (* sofar is the dir_ref we currently got to; starts off as the root *)
-    let rec f1 sofar ns = (match ns with 
+  let rec resolve_dir_ref_f1 ops s0 sofar ns = (match ns with 
       | [] -> (Some sofar)
       | n::ns -> (
         let m = ops.resolve11 s0 sofar n in
         match m with | None -> None | Some entry -> 
         match is_dir_ref_entry entry with | false -> None | true ->
         let dir_ref = dest_dir_ref_entry entry in 
-        f1 dir_ref ns))
-    in
-    let Some(d0_ref) = ops.get_root1 s0 in
+        resolve_dir_ref_f1 ops s0 dir_ref ns))
+
+  let resolve_dir_ref ops s0 ns = (
+    (* sofar is the dir_ref we currently got to; starts off as the root *)
+    (* FIXME separate out nested rec defns, so easier to transport to HOL backend *)
+    let f1 = resolve_dir_ref_f1 ops s0 in
+    let d0_ref = dest_Some(ops.get_root1 s0) in (* FIXME prefer dest_Some to let Some(x) = for HOL backend *)
     f1 d0_ref ns)
   let (_:ty_ops' -> ty_impl' -> name list -> dir_ref' option) = resolve_dir_ref
 
   (* let dir_exists ops s0 ns = (resolve_dir_ref ops s0 ns <> None) *)
 
   (* want to restrict uses of resolve_dir_ref and resolve_inode_ref to this module *)
+  (* FIXME check this is never used on the root directory, or get_parent_dir root = root, or maybe return None *)
   let get_parent_dir ops s0 nl = (
     resolve_dir_ref ops s0 (butlast nl.ns2))
   let (_:ty_ops' -> ty_impl' -> ty_name_list2 -> dir_ref' option) = get_parent_dir
@@ -383,9 +389,9 @@ module Resolve = struct
   (* FIXME this is only OK if the e.g. d/../x/y/z we have that d exists FIXME do not use! *)
   let process_dotdot ops s0 nl = (
     let f1 sofar n = (
-      if (n=".." && sofar <> []) then 
+      if ((n="..") && sofar <> []) then 
         (butlast sofar) 
-      else if (n=".." && sofar = []) then
+      else if ((n="..") && (sofar = [])) then
         (failwith "process_dot_dotdot")
       else
         (sofar@[n])) 
@@ -614,10 +620,25 @@ module Fs_ops2 = struct
     | Fname2(i0_ref,ns_src)  -> (
       match dpath with 
       | None2 ns_dst -> (
-        let Some(d0_ref) = get_parent_dir ops s0 ns_dst in
-        let s0 = ops.link_file1 s0 i0_ref d0_ref (last ns_dst.ns2) in
-        put_state' s0)
+        match (get_parent_dir ops s0 ns_dst) with (* FIXME what if ns_dst.ns2 = [] *)
+        | None -> (myraise ENOENT)
+        | Some(d0_ref) -> (
+          let s0 = ops.link_file1 s0 i0_ref d0_ref (last ns_dst.ns2) in
+          put_state' s0))
+      | Err2(_,_) -> (
+        (maybe_raise EEXIST) >>= fun _ -> (* arguably linux bug *)
+        myraise ENOTDIR)
       | _ -> (myraise EEXIST))
+    | Dname2(_,_) -> (
+      (match dpath with
+        | None2 ns_dst -> (
+          match (get_parent_dir ops s0 ns_dst) with (* FIXME what if ns_dst.ns2 = [] *)
+          | None -> (maybe_raise ENOENT)
+          | _ -> do_nothing)
+        | Err2 (_,_) -> (maybe_raise EEXIST)  (* arguably a linux bug - prefer ENOTDIR? *)
+        | _ -> (maybe_raise EEXIST)) >>= (fun _ ->
+      myraise EPERM))
+    | Err2(_,_) -> (myraise ENOTDIR)
     | _ -> (myraise ENOENT))
 
   let mkdir ops rpath perms = (
@@ -625,9 +646,11 @@ module Fs_ops2 = struct
     get_state >>= fun s0 ->
     match rpath with 
     | None2(ns) -> (
-      let Some(d0_ref) = get_parent_dir ops s0 ns in
-      let s0 = ops.mkdir1 s0 d0_ref (last ns.ns2) in
-      put_state' s0)
+      match (get_parent_dir ops s0 ns) with (* FIXME what if ns_dst.ns2 = [] *)
+      | None -> (myraise ENOENT)
+      | Some(d0_ref) -> (
+        let s0 = ops.mkdir1 s0 d0_ref (last ns.ns2) in
+        put_state' s0))
     | Dname2(_,_) -> (myraise EEXIST)
     | Fname2(_,_) -> (myraise EEXIST))
 
@@ -699,7 +722,15 @@ module Fs_ops2 = struct
     get_state >>= (fun s0 -> 
     match rsrc with
     | None2 _ -> (myraise ENOENT) (* no src file *)
-    | Err2 (_,_) -> (myraise ENOTDIR)
+    | Err2 (_,_) -> (
+      (* target may have ENOENT path *)
+      (match rdst with 
+      | None2 ns_dst -> (
+        match get_parent_dir ops s0 ns_dst with
+        | None -> (maybe_raise ENOENT) (* parent dir of dst doesn't exist *)
+        | Some _ -> do_nothing)
+      | _ -> do_nothing) >>= fun _ -> (
+      myraise ENOTDIR))
     | Fname2 (i0_ref,ns_src) -> (
       match rdst with 
       | None2 ns_dst -> (
@@ -721,13 +752,12 @@ module Fs_ops2 = struct
         (* FIXME may want to have putstate return a void value *)
       | Dname2 (d0_ref,ns_dst) -> (
         (* several reasonable options *)
-        (* arguably a Linux bug? *)
         (if (ns_dst.ends_with_slash2) then 
-          maybe_raise ENOTDIR 
+          maybe_raise ENOTDIR         (* arguably a Linux bug? not posix? *)
         else 
           do_nothing) >>= (fun _ -> 
         if ((ops.readdir1 s0 d0_ref).ret2<>Names1[]) then 
-          maybe_raise ENOTEMPTY
+          maybe_raise ENOTEMPTY       (* arguably a Linux bug? not posix? *)
         else
           do_nothing) >>= (fun _ ->
         myraise EISDIR))
@@ -768,7 +798,7 @@ module Fs_ops2 = struct
           (myraise EINVAL)
         (* FIXME check if dir not empty *)
         else if ((ops.readdir1 s0 d1_ref).ret2<>Names1[]) then 
-          (myraise ENOTEMPTY) 
+          (myraise ENOTEMPTY)          (* arguably a Linux bug? not posix? *)
         (* otherwise target dir is empty; do rename; FIXME presumably root, if empty, can't be target unless src=root *)
         (* FIXME with the unix backend, we really don't want to execute this last because we know we are going to raise an error; but we must allow for future stages to raise further exceptions *)
         else
@@ -780,11 +810,13 @@ module Fs_ops2 = struct
   let rmdir ops rpath = (
     get_state >>= fun s0 ->
     match rpath with 
-    | Dname2(_,ns) -> (
-      (* FIXME for resolving a file, often useful to have dir ref as well *)
-      let Some(d0_ref) = get_parent_dir ops s0 ns in
-      let s0 = ops.unlink1 s0 d0_ref (last ns.ns2) in
-      put_state' s0)
+    | Dname2(d0_ref,ns) -> (
+      if ((ops.readdir1 s0 d0_ref).ret2<>Names1[]) then
+        (myraise ENOTEMPTY)
+      else
+        let Some(d1_ref) = get_parent_dir ops s0 ns in
+        let s0 = ops.unlink1 s0 d1_ref (last ns.ns2) in
+        put_state' s0)
     | Fname2 _ -> (myraise ENOTDIR)
     | None2 _ -> (myraise ENOENT))
 
@@ -871,7 +903,7 @@ module Fs_ops3 = struct
     get_state >>= fun s0 -> 
     let rsrc = process_path ops s0 src in
     let rdst = process_path ops s0 dst in
-    if (is_Err2 rsrc || is_Err2 rdst) then (myraise ENOTDIR) else Fs_ops2.link ops rsrc rdst)
+    Fs_ops2.link ops rsrc rdst)
 
   let mkdir ops path perms = (
     get_state >>= fun s0 ->
@@ -1008,15 +1040,20 @@ module Transition_system = struct
     let rs = List.map f1 rs in
     rs)
   let (_:ty_ops' -> state' -> ty_label -> (state' * (error,ret_value)sum) finset) = trans
+
+  (* convenience method to process a label; always choose first possible result (state,e+v) *)
+  let process_label ops s0 lbl = (
+    let rs = trans ops s0 lbl in
+    let _ = if rs = finset_empty then failwith "process_label: no result state" else () in
+    let (s',v) = finset_choose rs in
+    (s',v))
   
-  (* convenience method to process a list of labels; always choose first possible result (state,e+v) *)
+  (* convenience method to process a list of labels *)
   let process_labels ops s0 lbls = (
     let f1 = (fun xs -> fun lbl -> 
       let l = last xs in
       let (_,_,(s,_)) = l in
-      let rs = trans ops s lbl in
-      let _ = if rs = finset_empty then failwith "process_labels: no result state" else () in
-      let (s',v) = finset_choose rs in
+      let (s',v) = process_label ops s lbl in
       xs@[(List.length xs,lbl,(s',v))])
     in
     let dummy_lbl = LINK("dummy lbl","dummy lbl") in
