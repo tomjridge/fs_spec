@@ -360,30 +360,10 @@ open Fs_spec_everything;;</code></pre>
 
 <span class="kw">end</span></code></pre>
 <h2 id="resolve-names"><a href="#resolve-names">Resolve names</a></h2>
-<p>We want to take a string such as <code>/x/y/z/d/</code> and process it:</p>
-<ul>
-<li>extract the components</li>
-<li>record whether the string starts in / (* but maybe vfs ensures all strings start in / *)</li>
-<li>record whether the string ends in /</li>
-<li>process the string (against the current state) to remove .. and . (providing entries exist; if not return ENOENT; function remove_dot_dotdot) and empty entries</li>
-<li>then compare result with the current state to determine whether the string
-<ol style="list-style-type: decimal">
-<li>ends with a / and matches a dir</li>
-<li>ends with a / and matches a file (error)</li>
-<li>doesn't end with a slash and matches a file or dir</li>
-<li>ends with a slash or not, and doesn't match anything</li>
-</ol></li>
-</ul>
-<p>Proposed processing of last step: Ignoring trailing slash, do we match or not? Yes - check agreement with trailing slash (1) and (2) and (3). No - (4)</p>
-<p>--</p>
-<p>Update: we first process the string to give a list of entries; /a/b/c -&gt; [&quot;&quot;;&quot;a&quot;;&quot;b&quot;;&quot;c&quot;]; /a/b/c/ -&gt; [&quot;&quot;;&quot;a&quot;;&quot;b&quot;;&quot;c&quot;;&quot;&quot;]; a/b/c -&gt; [&quot;a&quot;;&quot;b&quot;;&quot;c&quot;]; note that [] is not in the range of this function; the empty string &quot;&quot; maps to [&quot;&quot;]. We keep this first list because we may need to examine it at some points. We expect that all paths start with a slash. So we remove the first empty component. We record the last empty component as &quot;ends_with_slash2&quot;</p>
-<p>Note that this assumption that the path starts with / is somewhat dangerous because it means that we have to have a prior step which handles empty string. But this prior step may need to raise an error, or it may defer to an error raised at a later stage. So really we can't assume that paths start with a /: the empty string must be dealt with. But we probably can assume that relative paths are processed by appending them to the processes CWD;</p>
+<p>Update: we first process the string to give a list of entries; /a/b/c -&gt; [&quot;&quot;;&quot;a&quot;;&quot;b&quot;;&quot;c&quot;]; /a/b/c/ -&gt; [&quot;&quot;;&quot;a&quot;;&quot;b&quot;;&quot;c&quot;;&quot;&quot;]; a/b/c -&gt; [&quot;a&quot;;&quot;b&quot;;&quot;c&quot;]; note that [] is not in the range of this function; the empty string &quot;&quot; maps to [&quot;&quot;]. We keep this first list because we may need to examine it at some points.</p>
+<p>FIXME we need to distinguish between a null string and an empty string</p>
 <p>what about a relative path that is empty? in this case, it appears that this is returned as an error ENOENT (so the CWD is not appended in this case)</p>
-<p>so it appears we need both the path of the process, and the actual path supplied as a parameter to the command (and is there a normal form for the path supplied as CWD?)</p>
 <p>interestingly if you delete /tmp/d1 and a process is still in d1, the PWD for that process is /tmp/d1; and in /proc/pid/cwd it says &quot;/tmp/d1 (deleted)&quot;</p>
-<p>--</p>
-<p>lets move to a list of entries</p>
-<p>define functions starts_with, ends_with</p>
 <pre class="sourceCode ocaml"><code class="sourceCode ocaml">
 <span class="co">(* FIXME tidy this up *)</span>
 <span class="ot">module</span> X = <span class="kw">struct</span>

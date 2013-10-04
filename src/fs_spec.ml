@@ -329,38 +329,13 @@ end
 (*
 ## Resolve names
 
-We want to take a string such as `/x/y/z/d/` and process it:
+Update: we first process the string to give a list of entries; /a/b/c -> ["";"a";"b";"c"]; /a/b/c/ -> ["";"a";"b";"c";""]; a/b/c -> ["a";"b";"c"]; note that [] is not in the range of this function; the empty string "" maps to [""]. We keep this first list because we may need to examine it at some points. 
 
-  * extract the components 
-  * record whether the string starts in / (* but maybe vfs ensures all strings start in / *)
-  * record whether the string ends in /
-  * process the string (against the current state) to remove .. and . (providing entries exist; if not return ENOENT; function remove_dot_dotdot) and empty entries
-  * then compare result with the current state to determine whether the string
-      (1) ends with a / and matches a dir
-      (2) ends with a / and matches a file (error)
-      (3) doesn't end with a slash and matches a file or dir
-      (4) ends with a slash or not, and doesn't match anything
-
-Proposed processing of last step: Ignoring trailing slash, do we match or not? Yes - check agreement with trailing slash (1) and (2) and (3). No - (4)
-
---
-
-Update: we first process the string to give a list of entries; /a/b/c -> ["";"a";"b";"c"]; /a/b/c/ -> ["";"a";"b";"c";""]; a/b/c -> ["a";"b";"c"]; note that [] is not in the range of this function; the empty string "" maps to [""]. We keep this first list because we may need to examine it at some points. We expect that all paths start with a slash. So we remove the first empty component. We record the last empty component as "ends_with_slash2"
-
-Note that this assumption that the path starts with / is somewhat dangerous because it means that we have to have a prior step which handles empty string. But this prior step may need to raise an error, or it may defer to an error raised at a later stage. So really we can't assume that paths start with a /: the empty string must be dealt with. But we probably can assume that relative paths are processed by appending them to the processes CWD;
+FIXME we need to distinguish between a null string and an empty string
 
 what about a relative path that is empty? in this case, it appears that this is returned as an error ENOENT (so the CWD is not appended in this case)
 
-so it appears we need both the path of the process, and the actual path supplied as a parameter to the command (and is there a normal form for the path supplied as CWD?)
-
 interestingly if you delete /tmp/d1 and a process is still in d1, the PWD for that process is /tmp/d1; and in /proc/pid/cwd it says "/tmp/d1 (deleted)"
-
---
-
-lets move to a list of entries
-
-define functions starts_with, ends_with
-
 
 
 *)
