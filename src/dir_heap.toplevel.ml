@@ -1,5 +1,21 @@
 module Dir_heap = struct 
 (*
+# Interactive top-level directives
+
+Via findlib:
+
+    #use "topfind";;
+    #require "unix";;
+    #require "bigarray";;
+    #require "str";;
+    (* #cd "/tmp/l/general/research/fs/fs_spec/src";; *)
+    #use "fs_prelude.toplevel.ml";;
+    #use "fs_spec.toplevel.ml";;
+    #use "dir_heap.toplevel.ml";;
+
+
+*)
+(*
 # `dir_heap.ml`
 ## `Dir_heap_types1` and basic operations
 
@@ -56,7 +72,8 @@ module Dir_heap_types = struct
   type entries = Entries.ty_map (* FIXME in spec? *)
 
   type dir = {
-    dentries:entries
+    dentries:entries;
+    parent1:(dir_ref * name option) option (* FIXME do we want to allow this? *)
   }
 
   type inode = {
@@ -168,7 +185,7 @@ module Dir_heap_types = struct
  
   let new_dir s0 = (
     let d0_ref = _FIXME_new_dir_ref s0 in
-    let d0 = { dentries = Entries.empty } in
+    let d0 = { dentries = Entries.empty; parent1=None } in
     let s0 = update_drs_some s0 (d0_ref,d0) in
     (s0,(d0_ref,d0)))
 
@@ -186,7 +203,7 @@ module Dir_heap_types = struct
 
   let state0 = (
     (* an initial state with a root dir *)
-    let root = (Dir_ref 0, { dentries=Entries.empty }) in
+    let root = (Dir_ref 0, { dentries=Entries.empty; parent1=(Some(Dir_ref 0,None)) }) in
     let s0 = update_drs_some state0' root in
     s0)  
 
@@ -204,6 +221,8 @@ List of all operations involved in dependencies:
   * `update_ents_pointwise` (`internal_link_dir` or `internal_link_file`) can be dependent on creation of a new `dir_ref` (and writing of that `dir_ref` into `s0.dirs`) (eg `mkdir`)
   * `internal_link_dir` can be dependent on `update_ents_pointwise` (eg `mkdir`)
   * creation of a new `inode_ref` can be dependent on creation of a new `file_contents` (eg touch)
+
+The defns here only use ops. functions; is this really worth separating?
 
 *)
 
@@ -236,6 +255,30 @@ module Fs_ops1 = struct
   open Prelude
   open Fs_types1
 
+
+  (* might like type operators which pick up the type from a compound type eg. 'a ty_state_ops = { f1:(fst 'a); f2: (fst(snd 'a)) } etc *)
+  type ('dir_ref,'dir,'inode_ref,'inode,'state) ty_state_ops = {
+    get_init_state: unit -> 'state;
+    get_root: 'state -> 'dir_ref option;
+    lookup_dir: 'state -> 'dir_ref -> 'dir option;
+    lookup_inode: 'state -> 'inode_ref -> 'inode option;
+    update_inds_some: 'state -> ('inode_ref * 'inode) -> 'state;
+    update_dirs_some: 'state -> ('dir_ref * 'dir) -> 'state;
+    resolve1: 'state -> 'dir_ref -> name -> ('dir_ref,'inode_ref) entry option;
+    update_ents_pointwise: 'state -> 'dir_ref -> name -> ('dir_ref,'inode_ref) entry option -> 'state;
+    new_dir: 'state -> 'dir_ref -> name -> ('state * ('dir_ref * 'dir)); 
+    new_inode: 'state -> ('state * ('inode_ref * 'inode)); (* FIXME is dir linked in or not? yes, see mkdir *)
+    get_contents: 'inode -> file_contents;
+    set_contents: 'inode -> file_contents -> 'inode;
+    get_symlink: 'inode -> bool;
+    set_symlink: 'inode -> bool -> 'inode;
+    dest_inode_ref: 'state -> 'inode_ref -> int;
+    dest_dir_ref: 'state -> 'dir_ref -> int;
+    get_entries: 'dir -> name list; (* FIXME 'dir -> name list ? *)
+    with_parent: 'dir -> ('dir_ref * name option) -> 'dir
+  }
+
+
   (* for the purposes of type-checking the following defns without spurious type vars *)
   module X1 = struct
     type ty_ops' = (X.Y.t1,X.Y.t2,X.Y.t3,X.Y.t4,X.Y.t5) ty_state_ops
@@ -246,47 +289,28 @@ module Fs_ops1 = struct
   end
   open X1
 
+  (* FIXME not needed? *)
+  (*
+  type ('dir_ref,'dir,'inode_ref,'inode,'impl) state = {
+    ops3: ('dir_ref,'dir,'inode_ref,'inode,'impl) ty_state_ops;
+    s3: 'impl
+  }
+  *)
+
   let dest_dir_ref_entry = dest_Inl
   let dest_inode_ref_entry = dest_Inr
 
 
-(*
-  let update_ents_pointwise = Lift.update_ents_pointwise
-
-  let state0 = (
-    (* an initial state with a root dir *)
-    let root = (Dir_ref 0, { dentries=Entries.empty }) in
-    let s0 = Lift.update_drs_some state0 root in
-    s0)  
-
-  let get_dir s0 d0_ref = (
-    let Some(d0) = Lift.lookup_dir s0 d0_ref in
-    d0)
-
-  let get_inode s0 i0_ref = (
-    let Some(i0) = Lift.lookup_inode s0 i0_ref in
-    i0)
-
-  (*
-  let get_entries s0 es0_ref = (
-    let Some(es0) = lookup_entries s0 es0_ref in
-    es0)
-  *)
-
-  let get_root s0 = (
-    let Some(d) = Lift.lookup_dir s0 (Dir_ref 0) in
-    (Dir_ref 0, d))
-*)
-
-
-
-
   (* link directory d1 into d0 under name *)
   let internal_link_dir ops s0 d0_ref d1_ref name = (
+    let d1 = dest_Some(ops.lookup_dir s0 d1_ref) in
+    let d1 = ops.with_parent d1 (d0_ref,Some(name)) in
+    let s0 = ops.update_dirs_some s0 (d1_ref,d1) in
     let s0 = ops.update_ents_pointwise s0 d0_ref name (Some(Inl(d1_ref))) in
     s0)
   let (_:ty_ops' -> ty_impl' -> dir_ref' -> dir_ref' -> name -> ty_impl') = internal_link_dir
 
+  (* FIXME if unlinking a dir, we probably want to set parent to none *)
   let internal_unlink ops s0 d0_ref name = (
     let s0 = ops.update_ents_pointwise s0 d0_ref name None in
     s0)
@@ -307,8 +331,9 @@ module Fs_ops1 = struct
   let (_:ty_ops' -> ty_impl' -> inode_ref' -> dir_ref' -> name -> ty_return') = link_file
 
 
+  (* FIXME may want to set parent to none if unlinking a dir *)
   let unlink ops s0 d0_ref name = (
-    let s0 = ops.update_ents_pointwise s0 d0_ref name None in
+    let s0 = internal_unlink ops s0 d0_ref name in
     return s0)
   let (_:ty_ops' -> ty_impl' -> dir_ref' -> name -> ty_return') = unlink
 
@@ -436,12 +461,15 @@ module Dir_heap_ops = struct
   open Dir_heap_types
   open Fs_ops1
 
+  let dest_Some = Prelude.dest_Some
+
   let ops = {
     get_init_state=(fun () -> state0);
     get_root=(fun s0 -> Some (get_root s0));
     lookup_dir=lookup_dir;
     lookup_inode=lookup_inode;
     update_inds_some=update_inds_some;
+    update_dirs_some=update_drs_some;
     resolve1=resolve1;
     update_ents_pointwise=update_ents_pointwise;
     new_dir=(fun s0 _d0_ref _name -> new_dir s0);
@@ -455,11 +483,15 @@ module Dir_heap_ops = struct
     get_entries=(fun d0 -> 
       let es0 = d0.dentries in
       let binds = Entries.bindings es0 in
-      (List.map fst binds))
+      (List.map fst binds));
+    with_parent=(fun d0 -> fun (d1_ref,nopt) -> { d0 with parent1=(Some(d1_ref,nopt)) })
   }
 
   let ops1 = {
     get_init_state1=(fun () -> state0);
+    get_parent1=(fun s0 -> fun d0_ref -> 
+      let d0 = dest_Some(ops.lookup_dir s0 d0_ref) in
+      dest_Some(d0.parent1)); (* FIXME do we always know this will return something? disconnected dirs? *)
     get_root1=(fun s0 -> Some (get_root s0));
     dest_dir_ref1=dest_dir_ref;
     dest_inode_ref1=dest_inode_ref;

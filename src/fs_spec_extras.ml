@@ -13,7 +13,8 @@ module Extra_ops = struct
   open Prelude
   open Fs_types1
 
-  let process_label = Transition_system.process_label
+  let process_label = Fs_transition_system.process_label
+  let process_path_from_root = Resolve.process_path_from_root
 
 (*
   let kind_of_inode ops s0 i0 = (
@@ -31,10 +32,10 @@ module Extra_ops = struct
       kind_of_inode_ref ops s0 i0_ref))
 
   let kind_of_path ops s0 p = (
-    let rn = Resolve.process_path ops s0 p in
+    let rn = process_path_from_root ops s0 p in
     match rn with
-    | Dname2(_,_) -> S_DIR
-    | Fname2(i0_ref,_) -> (kind_of_inode_ref ops s0 i0_ref)
+    | Dname2 _ -> S_DIR
+    | Fname2(_,_,i0_ref,_) -> (kind_of_inode_ref ops s0 i0_ref)
     | _ -> (failwith ("kind_of_path, absent path: "^p)))
 
   let kind_of_name ops s0 d0_ref name = (
@@ -43,9 +44,9 @@ module Extra_ops = struct
 
   (* return a list of paths; p should point to a dir *)
   let ls_path ops s0 p = (
-    let rn = Resolve.process_path ops s0 p in
+    let rn = process_path_from_root ops s0 p in
     let Dname2(d0_ref,_) = rn in
-    let ns = name_list_of_rname2 rn in
+    let ns = name_list_of_res_name rn in
     let p = string_of_names ns.ns2 in
     let p = if p = "/" then "" else p in
     let Names1(es) = (ops.readdir1 s0 d0_ref).ret2 in
@@ -60,13 +61,15 @@ module Extra_ops = struct
     xs@xs')
 
   let read_all ops s0 p = (
-    let (_,Inr(Stats1(s))) = process_label ops s0 (STAT p) in
+    let pp = process_path_from_root ops s0 p in
+    let (_,Inr(Stats1(s))) = process_label ops s0 (FS_STAT pp) in
     let len = s.Unix.LargeFile.st_size in
-    let (_,Inr(Bytes1 bs)) = process_label ops s0 (READ(p,0,(* FIXME *)Int64.to_int len)) in
+    let (_,Inr(Bytes1 bs)) = process_label ops s0 (FS_READ(pp,0,(* FIXME *)Int64.to_int len)) in
     bs)
 
   let inode_of_path ops s0 p = (
-    let (_,Inr(Stats1(s))) = process_label ops s0 (STAT p) in
+    let pp = process_path_from_root ops s0 p in
+    let (_,Inr(Stats1(s))) = process_label ops s0 (FS_STAT pp) in
     s.Unix.LargeFile.st_ino)
 
 end

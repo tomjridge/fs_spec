@@ -37,11 +37,13 @@ module Finset = struct
 
   let finset_mem x xs = (List.mem x xs)
 
+  let finset_union xs1 xs2 = xs1 @ xs2
+
   let finset_insert x xs = (if List.mem x xs then xs else x::xs)
 
   let finset_partition = List.partition
 
-  let finset_bigunion = List.concat
+  let finset_bigunion = List.concat (* do we want to remove duplicates? FIXME do our finsets have duplicates? *)
 
   let finset_singleton x = finset_insert x finset_empty
 

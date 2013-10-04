@@ -457,6 +457,7 @@ code > span.er { color: #ff0000; font-weight: bold; }
 
   <span class="kw">let</span> ops1 = {
     get_init_state1=(<span class="kw">fun</span> () -&gt; state0);
+    get_parent1=(<span class="kw">fun</span> _ -&gt; <span class="kw">fun</span> d0_ref -&gt; <span class="kw">if</span> d0_ref = [] <span class="kw">then</span> (d0_ref,<span class="dt">None</span>) <span class="kw">else</span> (butlast d0_ref,<span class="dt">Some</span>(last d0_ref)));
     get_root1=(<span class="kw">fun</span> s0 -&gt; <span class="dt">Some[]</span>); <span class="co">(* []  is the dir ref for the root dir *)</span>
     dest_dir_ref1=dest_dir_ref;
     dest_inode_ref1=dest_inode_ref;

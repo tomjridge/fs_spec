@@ -1,7 +1,7 @@
-@ignore
 Hi-lock: (("^@.*" (0 (quote hi-blue-b) t)))
 Hi-lock: (("^#+.*" (0 (quote hi-green-b) t)))
 
+@dir_tree.md
 # Interactive top-level directives
 
 Via findlib:
@@ -16,7 +16,6 @@ Via findlib:
     #use "dir_tree.toplevel.ml";;
 
 
-@dir_tree.md
 # `dir_tree.ml`
 ## `Dir_tree_types` and basic operations
 
@@ -35,11 +34,24 @@ module Dir_tree_types = struct
   open Prelude
   open Fs_types1 (* FIXME remove dependence? have a core types and a state types? *)
 
-  (* dirs are represented by their path; obviously this isn't a real
+  (* dirs are represented by their canonical paths; obviously this isn't a real
      reference, so won't work if dirs are renamed *)
   type dir_ref = string list
   let dest_dir_ref s0 _ = 999
 
+  (* doesn't take into account actual state - only valid for actually existing dirs *)
+  let rec realpath' ns1 ns2 = (
+    match ns2 with 
+    | [] -> ns1
+    | n::ns2 -> (match n with
+      | "" -> (realpath' ns1 ns2)
+      | "." -> (realpath' ns1 ns2)
+      | ".." -> (
+        match ns1 with
+        | [] -> (realpath' ns1 ns2)
+        | _ -> (realpath' (butlast ns1) ns2))
+      | _ -> (realpath' (ns1@[n]) ns2)))
+  let realpath ns = realpath' [] ns    
 
   type inode_ref = Inode_ref of int
   let dest_inode_ref s0 (Inode_ref i) = i
@@ -165,6 +177,7 @@ module Dir_tree_types = struct
 
   let ops1 = {
     get_init_state1=(fun () -> state0);
+    get_parent1=(fun _ -> fun d0_ref -> if d0_ref = [] then (d0_ref,None) else (butlast d0_ref,Some(last d0_ref)));
     get_root1=(fun s0 -> Some[]); (* []  is the dir ref for the root dir *)
     dest_dir_ref1=dest_dir_ref;
     dest_inode_ref1=dest_inode_ref;
@@ -194,8 +207,8 @@ end
  #use "/tmp/l/general/research/fs/fs_utils/fs_printer.toplevel.ml";;
  #use "/tmp/l/general/research/fs/fs_utils/fs_parser.toplevel.ml";;
 
- #print_depth 200;;
- #print_length 600;;
+ #print_depth 400;;
+ #print_length 2000;;
 
 open Fs_spec
 open Fs_spec_everything
@@ -224,9 +237,11 @@ let ops = Dir_tree_types.ops1
 
 let take xs n = fst(List.fold_left (fun (xs,n) -> fun x -> if n=0 then (xs,n) else (xs@[x],n-1)) ([],n) xs)
 
-let xs = Transition_system.process_labels ops s0 (take lbls 12)
+let xs = Fs_transition_system.process_labels ops s0 (take lbls 12)
 
-let _ = Transition_system.trans ops s0 (MKDIR("/tmp",0))
+let ret_vals = List.map (fun (_,_,(_,r)) -> r) xs
+
+let _ = Fs_transition_system.trans ops s0 (MKDIR("/tmp",0))
 
 let path = "/tmp"
     let rpath1 = process_path1 path in
@@ -239,6 +254,24 @@ let _ = process_path2 ops s0 ["tmp"]
 let _ = resolve1 s0 [] "tmp"
 
 let _ = frame_resolve s0.es1 []
+
+(* testing os transition system transitions *)
+
+let fs_s0 = Dir_tree_types.state0 
+let lbls = [Some(OS_CREATE(Pid(1)))]
+let s0 = { pid_table=fmap_empty; fs_state=fs_s0 }
+
+let (_,_,s0) = last(Os_transition_system.os_process_labels ops s0 lbls)
+
+let [lbls] = P3_lib.P3.p3_run_parser Fs_parser.parse_OPS txt
+
+let lbls = 
+  let f1 lbl = [Some(OS_CALL(Pid 1,lbl));None;Some(OS_RETURN(Pid 1,Inr None1))] in
+  List.concat (List.map f1 lbls)
+
+let _ = Os_transition_system.os_process_labels ops s0 (take lbls 22)
+
+(* looks OK; next step is an error *)
 
 @ignore
 # Local variables

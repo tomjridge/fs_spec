@@ -1,3 +1,17 @@
+# Interactive top-level directives
+
+Via findlib:
+
+    #use "topfind";;
+    #require "unix";;
+    #require "bigarray";;
+    #require "str";;
+    (* #cd "/tmp/l/general/research/fs/fs_spec/src";; *)
+    #use "fs_prelude.toplevel.ml";;
+    #use "fs_spec.toplevel.ml";;
+    #use "dir_tree.toplevel.ml";;
+
+
 # `dir_tree.ml`
 ## `Dir_tree_types` and basic operations
 
@@ -16,11 +30,24 @@ module Dir_tree_types = struct
   open Prelude
   open Fs_types1 (* FIXME remove dependence? have a core types and a state types? *)
 
-  (* dirs are represented by their path; obviously this isn't a real
+  (* dirs are represented by their canonical paths; obviously this isn't a real
      reference, so won't work if dirs are renamed *)
   type dir_ref = string list
   let dest_dir_ref s0 _ = 999
 
+  (* doesn't take into account actual state - only valid for actually existing dirs *)
+  let rec realpath' ns1 ns2 = (
+    match ns2 with 
+    | [] -> ns1
+    | n::ns2 -> (match n with
+      | "" -> (realpath' ns1 ns2)
+      | "." -> (realpath' ns1 ns2)
+      | ".." -> (
+        match ns1 with
+        | [] -> (realpath' ns1 ns2)
+        | _ -> (realpath' (butlast ns1) ns2))
+      | _ -> (realpath' (ns1@[n]) ns2)))
+  let realpath ns = realpath' [] ns    
 
   type inode_ref = Inode_ref of int
   let dest_inode_ref s0 (Inode_ref i) = i
@@ -146,6 +173,7 @@ module Dir_tree_types = struct
 
   let ops1 = {
     get_init_state1=(fun () -> state0);
+    get_parent1=(fun _ -> fun d0_ref -> if d0_ref = [] then (d0_ref,None) else (butlast d0_ref,Some(last d0_ref)));
     get_root1=(fun s0 -> Some[]); (* []  is the dir ref for the root dir *)
     dest_dir_ref1=dest_dir_ref;
     dest_inode_ref1=dest_inode_ref;

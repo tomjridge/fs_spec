@@ -1,12 +1,3 @@
-dump_fs: csv encode path names, add command line processing
-
-want to write a script to dump a complete filesystem using shasum
-
-want to implement same for ocaml fs
-
-want to write another script to alpha convert this output (to get a canonical repn of the equiv classes); actually this should be part of dumpfs
-
-@ignore
 Hi-lock: (("^@.*" (0 (quote hi-blue-b) t)))
 Hi-lock: (("^#+.*" (0 (quote hi-green-b) t)))
 
@@ -221,11 +212,13 @@ module Finset = struct
 
   let finset_mem x xs = (List.mem x xs)
 
+  let finset_union xs1 xs2 = xs1 @ xs2
+
   let finset_insert x xs = (if List.mem x xs then xs else x::xs)
 
   let finset_partition = List.partition
 
-  let finset_bigunion = List.concat
+  let finset_bigunion = List.concat (* do we want to remove duplicates? FIXME do our finsets have duplicates? *)
 
   let finset_singleton x = finset_insert x finset_empty
 
@@ -954,6 +947,8 @@ module Fs_types1 = struct
 
   open Prelude
 
+  type num = int (* FIXME; also fix uses of type int below to be num where appropriate *)
+
   type bytes = MyDynArray.t
   type name = string (* shortest component of a filename - doesn't include /; may be empty; may be . or .. *)
 
@@ -1075,6 +1070,7 @@ module Fs_types1 = struct
     | UNLINK of string
     | WRITE of (string * int * bytes * int)
 
+
   type file_contents = bytes (* really a map from index to ... *)
 
   type ret_value = None1 | Int1 of int | Bytes1 of bytes (* FIXME add init return type *) | Names1 of name list
@@ -1087,77 +1083,72 @@ module Fs_types1 = struct
   type dirname = string list
   type filename = string list (* non-empty *)
 
-  (* the type of parsed paths; what is important is whether the name ends with a slash *)
-  type ty_name_list2 = {
-    ns2: name list;
-    ends_with_slash2: bool; 
-  }
-
-  (* we cannot supply Fname from user space: a name /tmp/tmp.txt may refer to a file or a dir *)
-  (* resolved name *)
-  (* type rname1 = Dname1 of name list | Fordname1 of name list *)
-  (* resolved name relative to a state *)
-  type ('dir_ref,'inode_ref) rname2 = 
-    Dname2 of 'dir_ref * ty_name_list2
-  | Fname2 of 'inode_ref * ty_name_list2 
-  | None2 of ty_name_list2
-  | Err2 of 'inode_ref * ty_name_list2 
-  (* invariant: if Fname2 ns, then not (ns.ends_with_slash2) *)
-  (* invariant: if Err2 then ns.ends_with_slash2 *)
-  (* FIXME since these are resolved, we may want to include the i0_ref and d0_ref *)
-
-  let is_Err2 x = (match x with | Err2 _ -> true | _ -> false)
-
-  let name_list_of_rname2 n = (match n with 
-    | Dname2 (_,ns) -> ns
-    | Fname2 (_,ns) -> ns
-    | None2 ns -> ns
-    | Err2 (_,ns) -> ns)
- 
-  let string_of_names ns = ("/"^(String.concat "/" ns))
-
-  let string_of_rname2 n = (
-    let ns = name_list_of_rname2 n in
-    ((String.concat "/" ns.ns2)^(if ns.ends_with_slash2 then "/" else ""))) (* FIXME shouldn't this start with / ? *)
-
-  let is_None2 x = (match x with None2 _ -> true | _ -> false)
-
-
-
-
   type ('dir_ref,'inode_ref) entry = ('dir_ref,'inode_ref) sum
   let is_dir_ref_entry = is_Inl
   let is_inode_ref_entry = is_Inr
   let dest_dir_ref_entry = dest_Inl
   let dest_inode_ref_entry = dest_Inr
 
-  (* might like type operators which pick up the type from a compound type eg. 'a ty_state_ops = { f1:(fst 'a); f2: (fst(snd 'a)) } etc *)
-  type ('dir_ref,'dir,'inode_ref,'inode,'state) ty_state_ops = {
-    get_init_state: unit -> 'state;
-    get_root: 'state -> 'dir_ref option;
-    lookup_dir: 'state -> 'dir_ref -> 'dir option;
-    lookup_inode: 'state -> 'inode_ref -> 'inode option;
-    update_inds_some: 'state -> ('inode_ref * 'inode) -> 'state;
-    resolve1: 'state -> 'dir_ref -> name -> ('dir_ref,'inode_ref) entry option;
-    update_ents_pointwise: 'state -> 'dir_ref -> name -> ('dir_ref,'inode_ref) entry option -> 'state;
-    new_dir: 'state -> 'dir_ref -> name -> ('state * ('dir_ref * 'dir)); 
-    new_inode: 'state -> ('state * ('inode_ref * 'inode)); (* FIXME is dir linked in or not? yes, see mkdir *)
-    get_contents: 'inode -> file_contents;
-    set_contents: 'inode -> file_contents -> 'inode;
-    get_symlink: 'inode -> bool;
-    set_symlink: 'inode -> bool -> 'inode;
-    dest_inode_ref: 'state -> 'inode_ref -> int;
-    dest_dir_ref: 'state -> 'dir_ref -> int;
-    get_entries: 'dir -> name list; (* FIXME 'dir -> name list ? *)
+  (* break the string into components *)
+  type ty_name_list = {
+    ns2: name list; (* invariant: not [] *)
   }
+  (* let ends_with_slash nl = nl.ends_with_slash2 *)
 
-  (* FIXME not needed? *)
-  (*
-  type ('dir_ref,'dir,'inode_ref,'inode,'impl) state = {
-    ops3: ('dir_ref,'dir,'inode_ref,'inode,'impl) ty_state_ops;
-    s3: 'impl
+  (* process . and .. and empty entries relative to a cwd *)
+  type ('dir_ref,'inode_ref) ty_realpath1 = {
+    cwd3: 'dir_ref; (* cwd for process *)
+    nl3: ty_name_list; (* the original string *)
+    ns3: name list; (* invariant: not []; first entry is empty; no . and .. entries; no further empty entries (absolute paths) *)
+    (* FIXME we don't need e3  if we are interested in paths *)                                  
+                                  (* e3: (('dir_ref,'inode_ref) entry,name)sum (* inr means that the path might target a non-existent file or directory, but everything else resolved *) *)
   }
+  type ('dir_ref,'inode_ref) ty_realpath = OK1 of ('dir_ref,'inode_ref) ty_realpath1 | Err1 of (error * ty_name_list)
+                       
+  (* resolved name relative to a state *)
+  type ('dir_ref,'inode_ref) res_name = 
+    Dname2 of ('dir_ref * ('dir_ref,'inode_ref) ty_realpath1)
+  | Fname2 of ('dir_ref * name * 'inode_ref * ('dir_ref,'inode_ref) ty_realpath1)
+  | None2 of ('dir_ref * name * ('dir_ref,'inode_ref) ty_realpath1)
+  | Err2 of (error * ty_name_list)
+  (* invariant: if Fname2 ns, then not (ns.ends_with_slash2) *)
+  (* invariant: if Err2 then ns.ends_with_slash2 *)
+  (* FIXME since these are resolved, we may want to include the i0_ref and d0_ref *)
+
+  let is_Err2 x = (match x with | Err2 _ -> true | _ -> false)
+
+  let name_list_of_res_name n = (match n with 
+    | Dname2 (_,rp) -> rp.nl3
+    | Fname2 (_,_,_,rp) -> rp.nl3
+    | None2 (_,_,rp) -> rp.nl3
+    | Err2 (_,nl) -> nl)
+ 
+  let string_of_names ns = (String.concat "/" ns)
+
+  let string_of_res_name n = (
+    let nl = name_list_of_res_name n in
+    string_of_names nl.ns2)
+
+
+  type ('dir_ref,'inode_ref) ty_fs_label = 
+    | FS_LINK of (('dir_ref,'inode_ref) res_name * ('dir_ref,'inode_ref) res_name)
+    | FS_MKDIR of (('dir_ref,'inode_ref) res_name * file_perm)
+    | FS_OPEN of (('dir_ref,'inode_ref) res_name * open_flag list)
+    | FS_READ of (('dir_ref,'inode_ref) res_name * int * int)
+    | FS_READDIR of ('dir_ref,'inode_ref) res_name
+    | FS_RENAME of (('dir_ref,'inode_ref) res_name * ('dir_ref,'inode_ref) res_name)
+    | FS_RMDIR of ('dir_ref,'inode_ref) res_name
+    | FS_STAT of ('dir_ref,'inode_ref) res_name
+    | FS_SYMLINK of (('dir_ref,'inode_ref) res_name * string)
+    | FS_TRUNCATE of (('dir_ref,'inode_ref) res_name * int)
+    | FS_UNLINK of ('dir_ref,'inode_ref) res_name
+    | FS_WRITE of (('dir_ref,'inode_ref) res_name * int * bytes * int)
+
+
+  (*
+  let is_None2 x = (match x with None2 _ -> true | _ -> false)
   *)
+
 
   type 'impl ty_return2 = {
     state2: 'impl;
@@ -1168,6 +1159,7 @@ module Fs_types1 = struct
 
   type ('dir_ref,'inode_ref,'impl) ty_ops1 = {
     get_init_state1: unit -> 'impl;
+    get_parent1: 'impl -> 'dir_ref -> ('dir_ref * name option); (* parent of root is root; name is none iff root  *)
     get_root1: 'impl -> 'dir_ref option;
     dest_dir_ref1: 'impl -> 'dir_ref -> int;
     dest_inode_ref1: 'impl -> 'inode_ref -> int;
@@ -1179,13 +1171,73 @@ module Fs_types1 = struct
     mvdir1: 'impl -> 'dir_ref -> name -> 'dir_ref -> name -> 'impl ty_return2;
     read1: 'impl -> 'inode_ref -> 'impl ty_return2;
     readdir1: 'impl -> 'dir_ref -> 'impl ty_return2; (* don't return . and .. entries *)
-    resolve11: 'impl -> 'dir_ref -> name -> ('dir_ref,'inode_ref) entry option;
+    resolve11: 'impl -> 'dir_ref -> name -> ('dir_ref,'inode_ref) entry option; (* resolves normal entries; use get_parent for .. *)
     rm1: 'impl -> 'dir_ref -> name -> 'impl ty_return2; (* FIXME don't need this and unlink1 *)
     rmdir1: 'impl -> 'dir_ref -> name -> 'impl ty_return2; (* FIXME probably don't need this either *)
     touch1: 'impl -> 'dir_ref -> name -> 'impl ty_return2;
     write1: 'impl -> 'inode_ref -> bytes -> 'impl ty_return2;
     set_symlink1: 'impl -> 'inode_ref -> bool -> 'impl ty_return2;
   }
+
+  (* calls to the fs take place in a process context *)
+  type ('dir_ref,'impl) fs_state_process_state = {
+    cwd4: 'dir_ref;
+    fs_state4: 'impl
+  }
+    
+
+
+  (* modelling the host *)
+
+  (* process ids *)
+  type ty_pid = Pid of num
+
+  (* a process can only make a single call into OS (so, no threads); process is blocked until return *)
+  type os_label = 
+    | OS_CALL of (ty_pid * ty_label)
+    | OS_RETURN of (ty_pid * (error,ret_value) sum)
+    | OS_CREATE of ty_pid
+    | OS_DESTROY of ty_pid
+
+
+  (* file descriptors *)
+  type ty_fd = FD of num
+
+  (* dir handles *)
+  type ty_dh = DH of num
+
+  (* FIXME check this in linux kernel docs *)
+  type fd_open_closed_state = FD_OPEN | FD_CLOSED
+
+  type dh_open_closed_state = DH_OPEN | DH_CLOSED
+
+  type ('dir_ref,'inode_ref,'impl) fd_state = {
+    open_or_closed: fd_open_closed_state;
+    inode_ref2: 'inode_ref;
+    offset: num
+  }
+
+  type ('dir_ref,'inode_ref,'impl) dh_state = {
+    open_or_closed: dh_open_closed_state;
+    dir_ref2: 'dir_ref;
+    offset: num
+  }
+
+  type ('dir_ref,'inode_ref) ty_pid_run_state = RUNNING | BLOCKED_CALL of ('dir_ref,'inode_ref) ty_fs_label | PENDING_RETURN of ((error,ret_value) sum)
+
+  type ('dir_ref,'inode_ref,'impl) per_process_state = {
+    (* root3: 'dir_ref; *) (* process root directory; FIXME not currently implemented *)
+    cwd: 'dir_ref; (* FIXME rename this *)
+    fd_table: (ty_fd,('dir_ref,'inode_ref,'impl) fd_state) fmap;
+    dh_table: (ty_dh,('dir_ref,'inode_ref,'impl) dh_state) fmap;
+    pid_run_state: ('dir_ref,'inode_ref) ty_pid_run_state
+  }
+
+  type ('dir_ref,'inode_ref,'impl) ty_os_state = {
+    pid_table: (ty_pid,('dir_ref,'inode_ref,'impl) per_process_state) fmap;
+    fs_state: 'impl (* FIXME index this fieldname *)
+  }
+
 
 
 end
@@ -1206,6 +1258,26 @@ We want to take a string such as `/x/y/z/d/` and process it:
       (4) ends with a slash or not, and doesn't match anything
 
 Proposed processing of last step: Ignoring trailing slash, do we match or not? Yes - check agreement with trailing slash (1) and (2) and (3). No - (4)
+
+--
+
+Update: we first process the string to give a list of entries; /a/b/c -> ["";"a";"b";"c"]; /a/b/c/ -> ["";"a";"b";"c";""]; a/b/c -> ["a";"b";"c"]; note that [] is not in the range of this function; the empty string "" maps to [""]. We keep this first list because we may need to examine it at some points. We expect that all paths start with a slash. So we remove the first empty component. We record the last empty component as "ends_with_slash2"
+
+Note that this assumption that the path starts with / is somewhat dangerous because it means that we have to have a prior step which handles empty string. But this prior step may need to raise an error, or it may defer to an error raised at a later stage. So really we can't assume that paths start with a /: the empty string must be dealt with. But we probably can assume that relative paths are processed by appending them to the processes CWD;
+
+what about a relative path that is empty? in this case, it appears that this is returned as an error ENOENT (so the CWD is not appended in this case)
+
+so it appears we need both the path of the process, and the actual path supplied as a parameter to the command (and is there a normal form for the path supplied as CWD?)
+
+interestingly if you delete /tmp/d1 and a process is still in d1, the PWD for that process is /tmp/d1; and in /proc/pid/cwd it says "/tmp/d1 (deleted)"
+
+--
+
+lets move to a list of entries
+
+define functions starts_with, ends_with
+
+
 
 @fs_spec.ml
 
@@ -1245,119 +1317,108 @@ module Resolve = struct
     type ty_impl' = X.Y.t5
     type inode_ref' = X.Y.t3
     type ty_return' = X.Y.t5 ty_return2
-    type rname' = (X.Y.t1,X.Y.t3) rname2
+    type rname' = (X.Y.t1,X.Y.t3) res_name
+    type entry' = (dir_ref',inode_ref') entry
   end
   open XR
 
-
-  (* resolve ns, return a (dir_ref,dir); only used with a resolve *)
-  (* these seem to be used as shortcuts for looking up parents of a given path; but we want to ensure some invariants in lists of names; on the other hand, given a rname, to resolve the parent we don't want to have to go via strings *)
-  let rec resolve_dir_ref_f1 ops s0 sofar ns = (match ns with 
-      | [] -> (Some sofar)
-      | n::ns -> (
-        let m = ops.resolve11 s0 sofar n in
-        match m with | None -> None | Some entry -> 
-        match is_dir_ref_entry entry with | false -> None | true ->
-        let dir_ref = dest_dir_ref_entry entry in 
-        resolve_dir_ref_f1 ops s0 dir_ref ns))
-
-  let resolve_dir_ref ops s0 ns = (
-    (* sofar is the dir_ref we currently got to; starts off as the root *)
-    (* FIXME separate out nested rec defns, so easier to transport to HOL backend *)
-    let f1 = resolve_dir_ref_f1 ops s0 in
-    let d0_ref = dest_Some(ops.get_root1 s0) in (* FIXME prefer dest_Some to let Some(x) = for HOL backend *)
-    f1 d0_ref ns)
-  let (_:ty_ops' -> ty_impl' -> name list -> dir_ref' option) = resolve_dir_ref
-
-  (* let dir_exists ops s0 ns = (resolve_dir_ref ops s0 ns <> None) *)
-
-  (* want to restrict uses of resolve_dir_ref and resolve_inode_ref to this module *)
-  (* FIXME check this is never used on the root directory, or get_parent_dir root = root, or maybe return None *)
-  let get_parent_dir ops s0 nl = (
-    resolve_dir_ref ops s0 (butlast nl.ns2))
-  let (_:ty_ops' -> ty_impl' -> ty_name_list2 -> dir_ref' option) = get_parent_dir
-
-  (* ns cannot be empty; FIXME this is only used in resolve *)
-  let resolve_inode_ref ops s0 ns = (
-    let r = resolve_dir_ref ops s0 (butlast ns) in
-    match r with | None -> None | Some dir_ref ->
-    let n = last ns in
-    let m = ops.resolve11 s0 dir_ref n in
-    match m with | None -> None | Some entry -> 
-    match is_inode_ref_entry entry with | false -> None | true -> 
-    let i0_ref = dest_inode_ref_entry entry in (* assume a file *)
-    Some(i0_ref))
-  let (_:ty_ops' -> ty_impl' -> name list -> inode_ref' option) = resolve_inode_ref    
+  (* we introduce a local type to record the result of trying to resolve a path *)
+  type ('a,'b) ok_or_err = Ok3 of 'a | Err3 of 'b
 
   (* let file_exists ops s0 ns = (resolve_inode_ref ops s0 ns <> None) *)
 
-  (* assumes path starts with '/'; throws an exception if not; FIXME do we always know the path starts with '/'? *)
+  (* get the real path, given a dir_ref *)
+  let rec real_path_dir_ref ops s0 d0_ref = (
+    match (ops.get_parent1 s0 d0_ref) with
+    | (d1_ref,None) -> [""]
+    | (d1_ref,Some n) -> (real_path_dir_ref ops s0 d1_ref)@[n])
 
-  (* take a string, get components and whether ends in slash *)
+  type ('dir_ref,'inode_ref) ty_resolve_relative_ok = 
+  | Dir4 of 'dir_ref
+  | File4 of ('dir_ref * name * 'inode_ref)
+  | None4 of ('dir_ref * name)
+
+  let rec resolve_relative ops s0 sofar ns = (
+    match ns with 
+    | [] -> (Ok3(Dir4(sofar)))
+    | n::ns -> (
+      if (n=".") || (n="") then (
+        resolve_relative ops s0 sofar ns
+      ) else if (n="..") then (
+        let (dir_ref,_) = ops.get_parent1 s0 sofar in
+        resolve_relative ops s0 dir_ref ns
+      ) else (
+        let m = ops.resolve11 s0 sofar n in
+        match m with 
+        | None -> (
+          if (ns=[] || ns=[""]) then (* may end in a slash *)
+            Ok3(None4(sofar,n))
+          else
+            Err3(ENOENT))
+        | Some entry -> (
+          match entry with 
+          | Inr i0_ref -> (
+            if ns=[] then (* not allowed to end in slash *)
+              Ok3(File4(sofar,n,i0_ref)) 
+            else
+              Err3(ENOTDIR))
+          | Inl d0_ref -> (
+            resolve_relative ops s0 d0_ref ns)))))
+  let (_:ty_ops' -> ty_impl' -> dir_ref' -> name list -> ((dir_ref',inode_ref')ty_resolve_relative_ok,error) ok_or_err) = resolve_relative
+
   let process_path1 path = (
     let p = explode path in
-    if p = [] then failwith "process_path1: empty path" else
-    if List.hd p <> "/" then failwith "process_path: doesn't start with /" else
-    let p = List.tl p in
     let f1 (ns,cur) c = (if c="/" then (ns@[cur],"") else (ns,cur^c)) in
     let (ns,cur) = List.fold_left f1 ([],"") p in
-    let ends_with_slash = (cur="") in
-    let ns = (if ends_with_slash then ns else ns@[cur]) in (* FIXME this logic is wrong? if multiple slashes? *)
-    let ns = List.filter (fun n -> n <> "." && n <> "") ns in (* remove empty entries and "." entries *)
-    { ns2=ns; ends_with_slash2=ends_with_slash })
-  let (_:string -> ty_name_list2) = process_path1
+    let ns = ns@[cur] in
+    { ns2=ns })
+  let (_:string -> ty_name_list) = process_path1
 
-  (* preliminary processing of ns; drop empty components and "." components, and resolve ".." *)
-  (* idempotent *)
-  (* FIXME this is only OK if the e.g. d/../x/y/z we have that d exists FIXME do not use! *)
-  let process_dotdot ops s0 nl = (
-    let f1 sofar n = (
-      if ((n="..") && sofar <> []) then 
-        (butlast sofar) 
-      else if ((n="..") && (sofar = [])) then
-        (failwith "process_dot_dotdot")
-      else
-        (sofar@[n])) 
-    in
-    let ns = List.fold_left f1 [] nl.ns2 in
-    {nl with ns2=ns})
-  let (_:ty_ops' -> ty_impl' -> ty_name_list2 -> ty_name_list2) = process_dotdot 
-
-  (* take a state and a ty_name_list2, and check if name exists in state *)
-  let process_path2 ops s0 ns = (
-    (* FIXME we need to process .. here as well *)
-    match ns.ends_with_slash2 with 
-    | true -> (
-      let opt = resolve_dir_ref ops s0 ns.ns2 in
-      match opt with 
-      | Some(dir_ref) -> Dname2(dir_ref(*,dest_Some(ops.lookup_dir s0 dir_ref))*),ns)
-      | None -> (
-        let opt = resolve_inode_ref ops s0 ns.ns2 in 
-        match opt with
-        | None -> None2 ns
-          (* following case, ns ends with a slash, but resolves to a file *)
-        | Some(iref) -> Err2(iref(*,dest_Some(ops.lookup_inode s0 iref))*),ns)))
-    | false -> (
-      let opt = resolve_dir_ref ops s0 ns.ns2 in
-      match opt with
-      | Some(dir_ref) -> Dname2(dir_ref(*,dest_Some(ops.lookup_dir s0 dir_ref))*),ns)
-      | None -> (
-        let opt = resolve_inode_ref ops s0 ns.ns2 in
-        match opt with 
-        | Some(iref) -> Fname2(iref(*,dest_Some(ops.lookup_inode s0 iref)*),ns)
-        | None -> None2 ns)))
-  let (_:ty_ops' -> ty_impl' -> ty_name_list2 -> rname') = process_path2
+ (* assumes root not none *)
+ let process_name_list ops s0 cwd nl = (
+   let root = dest_Some (ops.get_root1 s0) in
+   if nl.ns2 = [""] then Err2(ENOENT,nl) (* nl.ns2 was the empty string *)
+   else (
+     let is_absolute_nl = (List.hd nl.ns2 = "") in
+     let r = (
+       if is_absolute_nl then
+         resolve_relative ops s0 root nl.ns2
+       else
+         resolve_relative ops s0 cwd nl.ns2)
+     in
+     match r with
+     | Ok3 x -> (
+       match x with
+       | Dir4 d0_ref -> (
+         let rp = { cwd3=cwd; nl3=nl; ns3=(real_path_dir_ref ops s0 d0_ref) } in
+         Dname2(d0_ref,rp))
+       | File4 (d0_ref,n,i0_ref) -> (
+         let rp = { cwd3=cwd; nl3=nl; ns3=((real_path_dir_ref ops s0 d0_ref)@[n]) } in
+         Fname2(d0_ref,n,i0_ref,rp))
+       | None4 (d0_ref,n) -> 
+         let rp = {cwd3=cwd; nl3=nl; ns3=(real_path_dir_ref ops s0 d0_ref)@[n] } in
+         None2 (d0_ref,n,rp))
+     | Err3 x -> (Err2(x,nl))))
+  let (_:ty_ops' -> ty_impl' -> dir_ref' -> ty_name_list -> rname') = process_name_list
 
   (* guarantees: returns option of Fname or Dname  *)
-  let process_path ops s0 path = (
+  let process_path ops s0 cwd path = (
     let nl = process_path1 path in
-    let nl = process_dotdot ops s0 nl in
-    let rpath = process_path2 ops s0 nl in
-    rpath)  
-  let (_:ty_ops' -> ty_impl' -> string -> rname') = process_path
+    let rn = process_name_list ops s0 cwd nl in
+    rn)  
+  let (_:ty_ops' -> ty_impl' -> dir_ref' -> string -> rname') = process_path
 
-  (* FIXME we want subsequent defns to work in terms of rname, and possible ty_name_list2; we want invariants on these *)
+  let process_path_from_root ops s0 path = (
+    let root = dest_Some(ops.get_root1 s0) in
+    process_path ops s0 root path)
 
+  let ends_with_slash rn = (
+    let nl = name_list_of_res_name rn in
+    last (nl.ns2) = "")
+
+  (* FIXME we want subsequent defns to work in terms of rname, and possible ty_name_list; we want invariants on these *)
+
+  (* note that true = list_prefix [] [] = list_prefix xs xs; but the semantics checks e.g. whether we are rename something to itself *)
   let rec list_prefix xs ys = (
     match (xs,ys) with
     | ([],_) -> true
@@ -1365,8 +1426,18 @@ module Resolve = struct
     | (x::xs,y::ys) -> (
       if (x=y) then list_prefix xs ys else false))
 
-  (* check if renaming a dir to a subdir of itself *)
-  let subdir nl_src nl_dst = (list_prefix nl_src.ns2 nl_dst.ns2)
+  (* check if renaming a dir to a subdir of itself; we expect to check for equality before calling this *)
+  let subdir s d = (
+    list_prefix s.ns3 d.ns3)
+
+  (* want to restrict uses of resolve_dir_ref and resolve_inode_ref to this module *)
+  (* FIXME check this is never used on the root directory, or get_parent_dir root = root, or maybe return None *)
+  (*
+  let get_parent_dir ops s0 nl = (
+    resolve_dir_ref ops s0 (butlast nl.ns2))
+  let (_:ty_ops' -> ty_impl' -> ty_name_list -> dir_ref' option) = get_parent_dir
+  *)
+
 
 end
 
@@ -1442,9 +1513,11 @@ module Fs_ops2 = struct
 (*  open Fs_ops1 *)
   (* open Resolve *)
 
-  let get_parent_dir = Resolve.get_parent_dir
-  let resolve_process_path2 = Resolve.process_path2
+(*  let get_parent_dir = Resolve.get_parent_dir
+  let resolve_process_path2 = Resolve.process_path2 *)
   let resolve_subdir = Resolve.subdir
+  let ends_with_slash = Resolve.ends_with_slash
+
 
   (* type error = Fs_types1.error *)
   type ('impl,'a) ty_return3 = (('impl * Fs_types1.error, 'impl * 'a) sum) finset
@@ -1459,7 +1532,7 @@ module Fs_ops2 = struct
   module X2 = struct
     type 'a ty_return3' = (X.Y.t5,'a) ty_return3
     type 'a ty_mymonad' = (X.Y.t5,'a) mymonad
-    type rname2' = (X.Y.t1,X.Y.t3) rname2    
+    type res_name' = (X.Y.t1,X.Y.t3) res_name    
     (* type ty_ops' = (X.Y.t1,X.Y.t2,X.Y.t3,X.Y.t4,X.Y.t5) ty_state_ops *)
     type ty_ops' = (X.Y.t1,X.Y.t3,X.Y.t5) ty_ops1
   end
@@ -1488,6 +1561,14 @@ module Fs_ops2 = struct
   let myraise e = Mymonad (fun (s) -> finset_singleton(Inl(s,e)))
   let maybe_raise e = Mymonad (fun (s) -> 
     finset_insert (Inr(s,())) (finset_singleton(Inl(s,e))))
+
+  (* bes is a list of (b,e); if exists a b that is true, raise those e's where b is true, else do nothing *)
+  let cond_raise bes = Mymonad (fun s ->
+    let bs = List.filter (fun (b,e) -> b=true) bes in
+    if bs=[] then 
+      finset_singleton(Inr(s,()))
+    else
+      finset_image (fun (b,e) -> Inl(s,e)) bs)      
 
   let choose xs = Mymonad (fun s -> finset_image (fun x -> Inr(s,x)) xs)
 
@@ -1537,78 +1618,74 @@ module Fs_ops2 = struct
   (* FIXME remove *)
   let put_state'' f = (put_state' (f ()))
 
+  (* posix/1 *)
+
   let link ops spath dpath = (
     get_state >>= fun s0 ->
     match spath with 
-    | Fname2(i0_ref,ns_src)  -> (
+    | Fname2(d0_ref,name,i0_ref,rp)  -> (
       match dpath with 
-      | None2 ns_dst -> (
-        match (get_parent_dir ops s0 ns_dst) with (* FIXME what if ns_dst.ns2 = [] *)
-        | None -> (myraise ENOENT)
-        | Some(d0_ref) -> (
-          let s0 = ops.link_file1 s0 i0_ref d0_ref (last ns_dst.ns2) in
-          put_state' s0))
-      | Err2(_,_) -> (
-        (maybe_raise EEXIST) >>= fun _ -> (* arguably linux bug *)
-        myraise ENOTDIR)
-      | _ -> (myraise EEXIST))
-    | Dname2(_,_) -> (
+      | None2 (d0_ref,n,rp) -> (
+        let s0 = ops.link_file1 s0 i0_ref d0_ref n in
+        put_state' s0)
+      | Err2(e,_) -> (
+        (* (maybe_raise EEXIST) >>= fun _ -> (* arguably linux bug *) *)
+        myraise e)
+      | Fname2 _ -> (myraise EEXIST)
+      | Dname2 _ -> (myraise EEXIST))
+    | Dname2 _ -> (
       (match dpath with
-        | None2 ns_dst -> (
-          match (get_parent_dir ops s0 ns_dst) with (* FIXME what if ns_dst.ns2 = [] *)
-          | None -> (maybe_raise ENOENT)
-          | _ -> do_nothing)
-        | Err2 (_,_) -> (maybe_raise EEXIST)  (* arguably a linux bug - prefer ENOTDIR? *)
-        | _ -> (maybe_raise EEXIST)) >>= (fun _ ->
+        | Err2(e,_) -> (maybe_raise e)
+        | _ -> do_nothing) >>= (fun _ ->
       myraise EPERM))
-    | Err2(_,_) -> (myraise ENOTDIR)
-    | _ -> (myraise ENOENT))
+    | Err2(e,_) -> (myraise e)
+    | None2 __ -> (myraise ENOENT))
 
   let mkdir ops rpath perms = (
     (* FIXME deal with perms *)
     get_state >>= fun s0 ->
     match rpath with 
-    | None2(ns) -> (
-      match (get_parent_dir ops s0 ns) with (* FIXME what if ns_dst.ns2 = [] *)
-      | None -> (myraise ENOENT)
-      | Some(d0_ref) -> (
-        let s0 = ops.mkdir1 s0 d0_ref (last ns.ns2) in
-        put_state' s0))
-    | Dname2(_,_) -> (myraise EEXIST)
-    | Fname2(_,_) -> (myraise EEXIST))
+    | None2(d0_ref,n,_) -> (
+      let s0 = ops.mkdir1 s0 d0_ref n in
+      put_state' s0)
+    | Err2(e,_) -> (myraise e)
+    | Dname2 _ -> (myraise EEXIST)
+    | Fname2 _ -> (myraise EEXIST))
+
+  (* FIXME we have to take care of flags eg O_TRUNC *)
+  (* FIXME return is int option - meaning optional file handle? *)
+  (* FIXME why is this called fopen (taking an fd?) rather than open? *)
+  (* FIXME the mapping between fds and files is handled elsewhere - needs a new part of spec *)
+  let _open ops rpath flags = (
+    get_state >>= fun s0 ->
+    match rpath with
+    | None2 _ -> (myraise ENOENT)
+    | Dname2(_,_) -> (myraise ENOENT) (* FIXME should be EISDIR? can we open a dir? *)
+    | _ -> (return None1)) (* FIXME err case should raise an err? *)
+  let (_:ty_ops' -> res_name' -> 'a -> ret_value ty_mymonad') = _open
 
   let open_create ops rpath = (
     get_state >>= fun s0 ->
     match rpath with 
-    | Dname2(_,_) -> (myraise EEXIST) 
-    | Fname2(_,_) -> (myraise EEXIST)
-    | None2 ns -> (
+    | Dname2 _ -> (myraise EEXIST) 
+    | Fname2 _ -> (myraise EEXIST)
+    | Err2 (e,_) -> (myraise e)
+    | None2(d0_ref,n,ns) -> (
       (* FIXME for us, open_create should only create files *)
-      if ns.ends_with_slash2 then 
+      if ends_with_slash rpath then 
         myraise EISDIR
-      (* maybe we are trying to create a file "" ie path was empty FIXME where is this from? *)
-      else if ns.ns2 = [] then 
-        myraise ENOENT
-      (* FIXME need to look at mode *)
       else
-        let dname = butlast ns.ns2 in
-        let fname = last ns.ns2 in
-        (* FIXME following is unusual *)
-        let dpath = resolve_process_path2 ops s0 { ns2=dname; ends_with_slash2=false } in
-        match dpath with
-        | Dname2(d0_ref,ns) -> (
-          let s0 = ops.touch1 s0 d0_ref fname in
-          put_state' s0)
-      | Fname2(_,_) -> (myraise ENOTDIR)
-      | _ -> (myraise ENOENT)))
-  let (_:ty_ops' -> rname2' -> ret_value ty_mymonad') = open_create
+        let s0 = ops.touch1 s0 d0_ref n in
+        put_state' s0))
+  let (_:ty_ops' -> res_name' -> ret_value ty_mymonad') = open_create
 
   (* FIXME the real spec would allow reading less than all the bytes; recall len is maxlen *)
-  let read ops rname2 ofs len = (
-    match rname2 with 
+  let read ops rn ofs len = (
+    match rn with 
     | None2 _ -> (myraise ENOENT)
-    | Dname2(_,_) -> (myraise ENOENT)
-    | Fname2(i0_ref,ns) -> (
+    | Dname2 _ -> (myraise ENOENT)
+    | Err2 (e,_) -> (myraise e)
+    | Fname2(d0_ref,n,i0_ref,rp) -> (
       get_state >>= (fun s0 -> (
       let r = ops.read1 s0 i0_ref in (* FIXME Fs_ops1 may have to take an offset too *)
       (put_state' r) >>= fun _ -> 
@@ -1623,167 +1700,185 @@ module Fs_ops2 = struct
       let bs' = MyDynArray.sub bs ofs len in
       (* let _ = print_endline "after" in *)
       return (Bytes1(bs'))))))
-  let (_:ty_ops' -> rname2' -> int -> int -> ret_value ty_mymonad') = read
+  let (_:ty_ops' -> res_name' -> int -> int -> ret_value ty_mymonad') = read
 
-  (* NB doesn't include . and .. *)
-  let readdir ops rname2 = (
+  let readdir ops rn = (
     get_state >>= (fun s0 -> (
-    match rname2 with 
+    match rn with 
+    | Err2 (e,_) -> (myraise e)
     | None2 _ -> (myraise ENOENT) (* (raise (Unix_error (ENOENT,"readdir","/FIXMEreaddir"))) (* FIXME we may need access to the underlying path that was given by the user *) *)
     | Fname2 _ -> (myraise ENOTDIR) (* (raise (Unix_error (ENOTDIR,"readdir","/FIXMEreaddir"))) *)
-    | Dname2(d0_ref,ns) -> (
+    | Dname2(d0_ref,rp) -> (
       let r = ops.readdir1 s0 d0_ref in
       (put_state' r) >>= (fun _ -> (
       return r.ret2))))))
-  let (_:ty_ops' -> rname2' -> ret_value ty_mymonad') = readdir
+  let (_:ty_ops' -> res_name' -> ret_value ty_mymonad') = readdir
   (* NB later we may want to also return a state, given access times can cause changes when reading etc *)
 
   (* FIXME surely a lot of this complexity is because this is the user land behaviour of the mv command - but we want to target the syscall interface *)
   (* FIXME we probably want the containing dirs as well, when doing rename; put this in resolve *)
   (* FIXME rename to subdir of self? *)
+  (* NB if an error is possible, then all transitions result in an error; we should check that this invariant holds of the spec *)
+
+  (* posix/2 *)
+
   let rename ops rsrc rdst = (
     get_state >>= (fun s0 -> 
     match rsrc with
-    | None2 _ -> (myraise ENOENT) (* no src file *)
-    | Err2 (_,_) -> (
+    | None2 _ -> (
       (* target may have ENOENT path *)
       (match rdst with 
-      | None2 ns_dst -> (
-        match get_parent_dir ops s0 ns_dst with
-        | None -> (maybe_raise ENOENT) (* parent dir of dst doesn't exist *)
-        | Some _ -> do_nothing)
-      | _ -> do_nothing) >>= fun _ -> (
-      myraise ENOTDIR))
-    | Fname2 (i0_ref,ns_src) -> (
+      | Err2 (e',_) -> (
+        maybe_raise e') (* tr/11 *)
+      | _ -> do_nothing) >>= (fun _ -> (
+        myraise ENOENT))) (* no src file *)
+    | Err2 (e,_) -> (
+      (* target may have ENOENT path *)
+      (match rdst with 
+      | Err2 (e',_) -> (
+        maybe_raise e') (* tr/1 *)
+      | _ -> do_nothing) >>= (fun _ -> (
+      myraise e))) (* tr/2 *)
+    | Fname2 (d0_ref,nsrc,i0_ref,rp) -> (
       match rdst with 
-      | None2 ns_dst -> (
+      | Err2 (e,_) -> (myraise e)
+      | None2 (d1_ref,ndst,rp) -> (
+        (let cond1 = ends_with_slash rdst in
+        cond_raise [(cond1,ENOTDIR)]) >>= fun _ -> (* tr/3 *)
         (* do the move; there is no file ns_dst *)
-        (* FIXME check rename to target where parent doesn't exist *)
-        match get_parent_dir ops s0 ns_dst with
-        | None -> (myraise ENOENT) (* parent dir of dst doesn't exist *)
-        | Some(d1_ref) -> (
-          let Some(d0_ref) = get_parent_dir ops s0 ns_src in
-          put_state'' (fun () -> ops.mv1 s0 d0_ref (last ns_src.ns2) d1_ref (last ns_dst.ns2))))
-      | Fname2 (i1_ref,ns_dst) -> (
+        put_state'' (fun () -> ops.mv1 s0 d0_ref nsrc d1_ref ndst))
+      | Fname2 (d1_ref,ndst,i1_ref,rp) -> (
         (* do the move; there is a file name ns_dst *)
-        let Some(d0_ref) = get_parent_dir ops s0 ns_src in
-        let Some(d1_ref) = get_parent_dir ops s0 ns_dst in
-        if (ns_dst.ns2=ns_src.ns2) then 
-          return None1 
+        if (d1_ref=d0_ref) && (ndst=nsrc) then 
+          return None1 (* tr/4 *)
         else
-          put_state'' (fun () -> ops.mv1 s0 d0_ref (last ns_src.ns2) d1_ref (last ns_dst.ns2)))
+          put_state'' (fun () -> ops.mv1 s0 d0_ref nsrc d1_ref ndst))
         (* FIXME may want to have putstate return a void value *)
-      | Dname2 (d0_ref,ns_dst) -> (
+      | Dname2 (d0_ref,rp) -> (
         (* several reasonable options *)
-        (if (ns_dst.ends_with_slash2) then 
-          maybe_raise ENOTDIR         (* arguably a Linux bug? not posix? *)
+        (if (ends_with_slash rdst) then 
+          maybe_raise ENOTDIR         (* tr/5 arguably a Linux bug? Confirmed non-posix behaviour *)
         else 
           do_nothing) >>= (fun _ -> 
         if ((ops.readdir1 s0 d0_ref).ret2<>Names1[]) then 
-          maybe_raise ENOTEMPTY       (* arguably a Linux bug? not posix? *)
+          maybe_raise ENOTEMPTY       (* tr/6 strange, but posix allows this; FIXME posix also allows EEXIST in this case *)
         else
           do_nothing) >>= (fun _ ->
-        myraise EISDIR))
-      | Err2(_,_) -> (
-        myraise ENOTDIR))
-    | Dname2 (d0_ref,ns_src) -> (
-      (* directory exists *)
+        myraise EISDIR))) (* expected *)
+    | Dname2 (d0_ref,rps) -> (
+      (* rename a directory; directory exists *)
       match rdst with
-      | None2 ns_dst -> (
+      | None2 (d1_ref,ndst,rpd) -> (
         (* do the move; there is no file ns_dst *)
-        let Some(d0_ref) = get_parent_dir ops s0 ns_src in
-        match get_parent_dir ops s0 ns_dst with
-        | None -> (myraise ENOENT) (* parent dir of dst doesn't exist *)
-        | Some(d1_ref) -> (
-          if (resolve_subdir ns_src ns_dst) then 
-            myraise EINVAL
-          else
-            put_state'' (fun () -> ops.mvdir1 s0 d0_ref (last ns_src.ns2) d1_ref (last ns_dst.ns2))))
-      | Err2 (_,ns_dst) -> (
-        (if (resolve_subdir ns_src ns_dst) then
-          maybe_raise EINVAL 
-        else 
-          do_nothing) >>= (fun _ -> 
-        myraise ENOTDIR))
-      | Fname2 (_,ns_dst) -> (
+        if (resolve_subdir rps rpd) then 
+          myraise EINVAL
+        else
+          let p = ops.get_parent1 s0 d0_ref in
+          match p with 
+          | (d0_ref,Some nsrc) -> (
+            put_state'' (fun () -> ops.mvdir1 s0 d0_ref nsrc d1_ref ndst))
+          | (d0_ref,None) -> ( 
+            (* src was root *)
+            myraise EINVAL))
+      | Err2 (e,_) -> (
+        (maybe_raise EINVAL) >>= (fun _ -> (* tr/7 confirmed non-posix behaviour *)
+        myraise e))
+      | Fname2 (_,_,_,rpd) -> (
         (* check rename to subdir before rename to file; NB there are different reasonable options here *)
-        (if (resolve_subdir ns_src ns_dst) then
+        (if (resolve_subdir rps rpd) then
           maybe_raise EINVAL 
         else 
           do_nothing) >>= (fun _ -> 
-        myraise ENOTDIR)) (* arguably this is a bug in linux? *)
-      | Dname2 (d1_ref,ns_dst) -> (
+        myraise ENOTDIR)) 
+      | Dname2 (d1_ref,rpd) -> (
         (* if same dir, return silently *)
         if (d1_ref=d0_ref) then
-          (return None1)
+          (return None1) (* tr/8 *)
         (* FIXME check if renaming to a subdir *) (* FIXME following two exceptions should be maybe_raise *)
-        else if (resolve_subdir ns_src ns_dst) then 
+        else if (resolve_subdir rps rpd) then 
           (myraise EINVAL)
         (* FIXME check if dir not empty *)
         else if ((ops.readdir1 s0 d1_ref).ret2<>Names1[]) then 
-          (myraise ENOTEMPTY)          (* arguably a Linux bug? not posix? *)
+          (myraise ENOTEMPTY) (* tr/9 *)
         (* otherwise target dir is empty; do rename; FIXME presumably root, if empty, can't be target unless src=root *)
         (* FIXME with the unix backend, we really don't want to execute this last because we know we are going to raise an error; but we must allow for future stages to raise further exceptions *)
         else
-          let Some(d0_ref) = get_parent_dir ops s0 ns_src in
-          let Some(d1_ref) = get_parent_dir ops s0 ns_dst in
-          put_state'' (fun () -> ops.mvdir1 s0 d0_ref (last ns_src.ns2) d1_ref (last ns_dst.ns2))))))
-  let (_:ty_ops' -> rname2' -> rname2' -> ret_value ty_mymonad') = rename      
+          let (d0_ref',x) = ops.get_parent1 s0 d0_ref in
+          let (d1_ref',y) = ops.get_parent1 s0 d1_ref in
+          match x with
+          | None -> (myraise EINVAL)
+          | Some nsrc -> (
+            match y with 
+            | None -> (
+              failwith "impossible rename of dir onto root; can't happen because dst must be nonempty")
+            | Some ndst -> (
+              put_state'' (fun () -> ops.mvdir1 s0 d0_ref' nsrc d1_ref' ndst)))))))
+  let (_:ty_ops' -> res_name' -> res_name' -> ret_value ty_mymonad') = rename      
 
   let rmdir ops rpath = (
     get_state >>= fun s0 ->
     match rpath with 
-    | Dname2(d0_ref,ns) -> (
+    | Dname2(d0_ref,rp) -> (
       if ((ops.readdir1 s0 d0_ref).ret2<>Names1[]) then
         (myraise ENOTEMPTY)
       else
-        let Some(d1_ref) = get_parent_dir ops s0 ns in
-        let s0 = ops.unlink1 s0 d1_ref (last ns.ns2) in
-        put_state' s0)
+        let (d1_ref,x) = ops.get_parent1 s0 d0_ref in
+        match x with 
+        | None -> (
+          (* attempt to remove the root directory, may fail or succeed *)
+          (maybe_raise EBUSY) >>= (fun _ ->
+            (return None1)))
+        | Some n -> (
+          let s0 = ops.unlink1 s0 d1_ref n in
+          put_state' s0))
     | Fname2 _ -> (myraise ENOTDIR)
-    | None2 _ -> (myraise ENOENT))
+    | None2 _ -> (myraise ENOENT)
+    | Err2 (e,_) -> (myraise e))
 
-  let stat ops rname2 = (
+  let stat ops rn = (
     get_state >>= (fun s0 -> (
-    (* let _ = (print_endline ("stat: "^(string_of_rname2 rname2))) in *)
-    match rname2 with
-    | None2 _ -> (myraise ENOENT)  (* (raise (Unix_error (ENOENT,"stat","/FIXMEstat"))) *)
-    | Fname2(i0_ref,ns) -> (return (Stats1 (default_file_stats ops s0 i0_ref)))
-    | Dname2(d0_ref,ns) -> (return (Stats1 (default_dir_stats ops s0 d0_ref)))))) (* FIXME remove ops arg from default_dir_stats *)
-  let (_:ty_ops' -> rname2' -> ret_value ty_mymonad') = stat
+    (* let _ = (print_endline ("stat: "^(string_of_res_name rn))) in *)
+    match rn with
+    | Err2 (e,_) -> (myraise e)
+    | None2 _ -> (myraise ENOENT) 
+    | Fname2(d0_ref,n,i0_ref,rp) -> (return (Stats1 (default_file_stats ops s0 i0_ref)))
+    | Dname2(d0_ref,rp) -> (return (Stats1 (default_dir_stats ops s0 d0_ref)))))) 
+  let (_:ty_ops' -> res_name' -> ret_value ty_mymonad') = stat
 
   let truncate ops rpath len = (
     get_state >>= fun s0 ->
     match rpath with 
+    | Err2 (e,_) -> (myraise e)
     | None2 _ -> (myraise ENOENT)
-    | Dname2(_,_) -> (myraise EISDIR) (* FIXME check error messages are sensible *)
-    | Fname2(i0_ref,ns) -> (
+    | Dname2 _ -> (myraise EISDIR) (* FIXME check error messages are sensible *)
+    | Fname2(d0_ref,n,i0_ref,rp) -> (
       let r = ops.read1 s0 i0_ref in
       let bs = dest_bytes1 r.ret2 in
       (* create a new array, of length len, with same contents *)
       let bs' = MyDynArray.resize bs len in
       let s0 = ops.write1 s0 i0_ref bs' in
       put_state' s0))
-  let (_:ty_ops' -> rname2' -> int -> ret_value ty_mymonad') = truncate
+  let (_:ty_ops' -> res_name' -> int -> ret_value ty_mymonad') = truncate
 
   let unlink ops rpath = (
     get_state >>= fun s0 ->
     match rpath with 
-    | None2(_) -> (myraise ENOENT)
-    | Dname2(_,_) -> (myraise EISDIR)
-    | Fname2(i0_ref,ns) -> (
+    | Err2(e,_) -> (myraise e)
+    | None2 _ -> (myraise ENOENT)
+    | Dname2 _ -> (myraise EISDIR)
+    | Fname2(d0_ref,n,i0_ref,rp) -> (
       (* FIXME for resolving a file, often useful to have dir ref as well *)
-      let Some(d0_ref) = get_parent_dir ops s0 ns in
-      let s0 = ops.unlink1 s0 d0_ref (last ns.ns2) in
+      let s0 = ops.unlink1 s0 d0_ref n in
       put_state' s0))
 
   (* FIXME we need to make this take an offset in order to be usable, also read *)
-  let write ops rname2 ofs bs len = (
+  let write ops rn ofs bs len = (
     get_state >>= fun s0 -> 
-    match rname2 with 
-    | None2 _ -> (myraise ENOENT) (* (raise (Unix_error (ENOENT,"read","/FIXMEwrite"))) *)
-    | Dname2(_,_) -> (myraise ENOENT) (* (raise (Unix_error (ENOENT,"read","/FIXMEwrite"))) *)
-    | Fname2(i0_ref,ns) -> (
+    match rn with 
+    | Err2 (e,_) -> (myraise e)
+    | None2 _ -> (myraise ENOENT) 
+    | Dname2 _ -> (myraise ENOENT)
+    | Fname2(d0_ref,n,i0_ref,rp) -> (
       choose (downto' len 0) >>= fun len ->
       let r = ops.read1 s0 i0_ref in
       let bs' = dest_bytes1 r.ret2 in
@@ -1792,8 +1887,20 @@ module Fs_ops2 = struct
       let r = ops.write1 s0 i0_ref bs'' in
       put_state' r >>= fun _ -> 
       return (Int1 len)))
-  let (_:ty_ops' -> rname2' -> int -> file_contents -> int -> ret_value ty_mymonad') = write
+  let (_:ty_ops' -> res_name' -> int -> file_contents -> int -> ret_value ty_mymonad') = write
 
+  (* FIXME this is a hack - should do lots of checking eg src is a dir *)
+  (*
+  let symlink ops src dst = (
+    open_create ops dst >>= fun _ -> 
+    write ops dst 0 (MyDynArray.of_string src) (String.length src) >>= fun _ -> 
+    get_state >>= fun s0 ->
+    let rpath = process_path ops s0 dst in
+    let Fname2(i0_ref,_) = rpath in
+    let r = ops.set_symlink1 s0 i0_ref true in
+    put_state' r)
+  let (_:ty_ops' -> string -> string -> ret_value ty_mymonad') = symlink    
+  *)
 
 end
 
@@ -1804,7 +1911,6 @@ This works in terms of strings; handles Err2 on resolving
 
 @fs_spec.ml
 
-(* FIXME check mv if src=dst *)
 module Fs_ops3 = struct 
 
   open Fs_types1
@@ -1816,16 +1922,18 @@ module Fs_ops3 = struct
   module X3 = struct 
     type 'a ty_return3' = (X.Y.t5,'a) ty_return3
     type 'a ty_mymonad' = (X.Y.t5,'a) mymonad
-    type rname2' = (X.Y.t1,X.Y.t3) rname2    
+    type res_name' = (X.Y.t1,X.Y.t3) res_name    
     (* type ty_ops' = (X.Y.t1,X.Y.t2,X.Y.t3,X.Y.t4,X.Y.t5) ty_state_ops *)
     type ty_ops' = (X.Y.t1,X.Y.t3,X.Y.t5) ty_ops1
   end
   open X3
 
+(*
+
   let link ops src dst = (
     get_state >>= fun s0 -> 
-    let rsrc = process_path ops s0 src in
-    let rdst = process_path ops s0 dst in
+    let rsrc = process_path ops s0.fs_state4 s0.cwd4 src in
+    let rdst = process_path ops s0.fs_state4 s0.cwd4 dst in
     Fs_ops2.link ops rsrc rdst)
 
   let mkdir ops path perms = (
@@ -1833,17 +1941,13 @@ module Fs_ops3 = struct
     let rpath = process_path ops s0 path in
     if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.mkdir ops rpath perms)
 
-  (* FIXME we have to take care of flags eg O_TRUNC *)
-  (* FIXME return is int option - meaning optional file handle? *)
-  (* FIXME why is this called fopen (taking an fd?) rather than open? *)
-  (* FIXME the mapping between fds and files is handled elsewhere - needs a new part of spec *)
   let _open ops path flags = (
     get_state >>= fun s0 ->
     let rpath = process_path ops s0 path in
     match rpath with
     | None2 _ -> (myraise ENOENT)
-    | Dname2(_,_) -> (myraise ENOENT) (* FIXME? can we open a dir? *)
-    | _ -> (return None1))
+    | Dname2(_,_) -> (myraise ENOENT) (* FIXME should be EISDIR? can we open a dir? *)
+    | _ -> (return None1)) (* FIXME err case should raise an err? *)
   let (_:ty_ops' -> string -> 'a -> ret_value ty_mymonad') = _open
  
   (* open call returns an fd; but may have side effects; open create is one such call; FIXME what are others? *)
@@ -1907,11 +2011,13 @@ module Fs_ops3 = struct
     put_state' r)
   let (_:ty_ops' -> string -> string -> ret_value ty_mymonad') = symlink    
 
+*)
+
 end
 
 
 @fs_spec.md
-## Transition system
+## Fs transition system
 
 The model is of a labelled transition system from state to state, but
 where each transition may result in a return to userland (of a value
@@ -1920,40 +2026,41 @@ behaviour.
 
 @fs_spec.ml
 
-module Transition_system = struct
+module Fs_transition_system = struct
 
   open Prelude 
   open Fs_types1
   open Fs_ops2
-  open Fs_ops3
+  (* open Fs_ops3 *)
 
   module X4 = struct 
     (* for the purposes of type-checking the following defns without spurious type vars *)
     (* type ty_ops' = (X.Y.t1,X.Y.t2,X.Y.t3,X.Y.t4,X.Y.t5) ty_state_ops *)
     type ty_ops' = (X.Y.t1,X.Y.t3,X.Y.t5) ty_ops1
     type state' = X.Y.t5
+    type ty_fs_label' = (X.Y.t1,X.Y.t3) ty_fs_label
   end
   open X4
 
   (* the transition function takes a state, a label, and returns an updated state with a possible value returned, or an error *)
   (* FIXME readlink is just read, but may want to have a separate label *)
-  let trans ops s0 lbl = (
+  let fs_trans ops s0 lbl = (
     (* let _ = print_endline (string_of_label lbl) in *)
     let m = (match lbl with 
-      | LINK (s,d) -> (link ops s d)
-      | MKDIR (s,p) -> (mkdir ops s p)
-      | OPEN (p,fs) -> (
+      | FS_LINK (s,d) -> (link ops s d)
+      | FS_MKDIR (s,p) -> (mkdir ops s p)
+      | FS_OPEN (p,fs) -> (
           if (List.mem O_CREAT fs) then (open_create ops p (* FIXME fs *)) 
           else (_open ops p fs))
-      | READ (p,i,j) -> (read ops p i j)
-      | READDIR p -> (readdir ops p)
-      | RENAME (s,d) -> (rename ops s d)
-      | RMDIR p -> (rmdir ops p)
-      | STAT p -> (stat ops p)
-      | SYMLINK (s,d) -> (symlink ops s d)
-      | TRUNCATE (p,l) -> (truncate ops p l)
-      | UNLINK p -> (unlink ops p)
-      | WRITE (p,ofs,bs,len) -> (write ops p ofs bs len))
+      | FS_READ (p,i,j) -> (read ops p i j)
+      | FS_READDIR p -> (readdir ops p)
+      | FS_RENAME (s,d) -> (rename ops s d)
+      | FS_RMDIR p -> (rmdir ops p)
+      | FS_STAT p -> (stat ops p)
+      | FS_SYMLINK (s,d) -> failwith "FIXME" (* (symlink ops s d) *)
+      | FS_TRUNCATE (p,l) -> (truncate ops p l)
+      | FS_UNLINK p -> (unlink ops p)
+      | FS_WRITE (p,ofs,bs,len) -> (write ops p ofs bs len))
     in
     let rs = run_mymonad m s0 in
     let f1 ve = (match ve with
@@ -1962,11 +2069,11 @@ module Transition_system = struct
     in
     let rs = List.map f1 rs in
     rs)
-  let (_:ty_ops' -> state' -> ty_label -> (state' * (error,ret_value)sum) finset) = trans
+  let (_:ty_ops' -> state' -> ty_fs_label' -> (state' * (error,ret_value)sum) finset) = fs_trans
 
   (* convenience method to process a label; always choose first possible result (state,e+v) *)
   let process_label ops s0 lbl = (
-    let rs = trans ops s0 lbl in
+    let rs = fs_trans ops s0 lbl in
     let _ = if rs = finset_empty then failwith "process_label: no result state" else () in
     let (s',v) = finset_choose rs in
     (s',v))
@@ -1979,12 +2086,155 @@ module Transition_system = struct
       let (s',v) = process_label ops s lbl in
       xs@[(List.length xs,lbl,(s',v))])
     in
-    let dummy_lbl = LINK("dummy lbl","dummy lbl") in
+    let dummy_lbl = FS_STAT(Err2(EINVAL, { ns2=["dummy lbl"] })) in
     let dummy_error_or_value = Inr None1 in
     List.fold_left f1 [(0,dummy_lbl,(s0,dummy_error_or_value))] lbls)
-  let (_:ty_ops' -> state' -> ty_label list -> (int * ty_label * (state' * (error,ret_value)sum)) list) = process_labels
+  let (_:ty_ops' -> state' -> ty_fs_label' list -> (int * ty_fs_label' * (state' * (error,ret_value)sum)) list) = process_labels
 
 end
+
+@fs_spec.md
+## OS transition system
+
+The model of transitions at the operating system level is:
+
+  * A call gets made with OS_CALL label
+
+  * The process gets moved to a blocked state
+
+  * Further steps process the call
+ 
+  * A return transition occurs with OS_RETURN; at this point, the process is unblocked
+
+@fs_spec.ml
+
+module Os_transition_system = struct
+
+  open Prelude 
+  open Fs_types1
+  open Fs_transition_system
+
+  let process_path = Resolve.process_path
+
+  module X5 = struct 
+    (* for the purposes of type-checking the following defns without spurious type vars *)
+    (* type ty_ops' = (X.Y.t1,X.Y.t2,X.Y.t3,X.Y.t4,X.Y.t5) ty_state_ops *)
+    type ty_ops' = (X.Y.t1,X.Y.t3,X.Y.t5) ty_ops1
+    type os_state' = (X.Y.t1,X.Y.t3,X.Y.t5) ty_os_state
+  end
+  open X5
+
+  (* s0 is impl state *)
+  let fs_lbl_of ops s0 cwd lbl = (
+    let pp = process_path ops s0 cwd in
+     match lbl with
+    | LINK (s,d) -> (FS_LINK(pp s, pp d))
+    | MKDIR (s,p) -> (FS_MKDIR(pp s, p))
+    | OPEN (p,fs) -> (FS_OPEN(pp p, fs))
+    | READ (p,i,j) -> (FS_READ(pp p, i, j))
+    | READDIR p -> (FS_READDIR(pp p))
+    | RENAME (s,d) -> (FS_RENAME(pp s, pp d))
+    | RMDIR p -> (FS_RMDIR(pp p))
+    | STAT p -> (FS_STAT(pp p))
+    | SYMLINK (s,d) -> failwith "FIXME" (* (symlink ops s d) *)
+    | TRUNCATE (p,l) -> (FS_TRUNCATE(pp p,l))
+    | UNLINK p -> (FS_UNLINK(pp p))
+    | WRITE (p,ofs,bs,len) -> (FS_WRITE(pp p,ofs,bs,len)))
+
+  (* we return a finite set of possible next states; FIXME should we have functions to decompose and recompose hosts etc without doing everything manually? *)
+  let os_trans_pid ops s0 pid lblopt = (
+    match (fmap_lookup s0.pid_table pid) with | None -> (failwith "os_trans: impossible")
+    | Some ppstate -> (
+      let cwd = ppstate.cwd in
+      match (ppstate.pid_run_state,lblopt) with 
+      | (RUNNING,Some(OS_CALL(pid',lbl))) -> (
+        if (pid' <> pid) then finset_empty
+        else (
+          let lbl = fs_lbl_of ops s0.fs_state cwd lbl in
+          let ppstate' = { ppstate with pid_run_state = BLOCKED_CALL(lbl) } in
+          let s0 = { s0 with pid_table=(fmap_update s0.pid_table (pid,ppstate')) } in
+          finset_singleton s0))
+      | (BLOCKED_CALL(lbl),None) -> (
+        let fs_s0 = s0.fs_state in
+        let next_fs_states = fs_trans ops fs_s0 lbl in
+        let f1 (fs_s0',ev) = (
+          let ppstate' = { ppstate with pid_run_state = PENDING_RETURN(ev) } in
+          { s0 with fs_state=fs_s0'; pid_table=(fmap_update s0.pid_table (pid,ppstate')) })
+        in
+        finset_image f1 next_fs_states)
+      | (PENDING_RETURN(ev),Some(OS_RETURN(pid',ev'))) -> (
+        if (pid' <> pid) then finset_empty 
+        else if (ev' <> ev) then finset_empty
+        else (
+          let ppstate' = { ppstate with pid_run_state = RUNNING } in
+          let s0 = { s0 with pid_table=(fmap_update s0.pid_table (pid,ppstate')) } in
+          finset_singleton s0))
+      | (RUNNING,None) -> (finset_singleton s0)
+      | (_,_) -> finset_empty))
+  let (_:ty_ops' -> os_state' -> ty_pid -> os_label option -> os_state' finset) = os_trans_pid
+
+  let create_pid ops s0 pid = { 
+    cwd=(dest_Some (ops.get_root1 s0)); 
+    fd_table=fmap_empty; 
+    dh_table=fmap_empty; 
+    pid_run_state=RUNNING 
+  }
+
+  let os_trans_pcreate_destroy ops s0 lblopt = (
+    match lblopt with | None -> finset_empty
+    | Some lbl -> (
+      match lbl with
+      | OS_CREATE(pid) -> (
+        if finset_mem pid (fmap_dom s0.pid_table) then 
+          finset_empty
+        else (
+          let s0 = { s0 with pid_table=(fmap_update s0.pid_table (pid,create_pid ops s0.fs_state pid)) } in
+          finset_singleton s0))
+      | OS_DESTROY(pid) -> (
+        if not (finset_mem pid (fmap_dom s0.pid_table)) then 
+          finset_empty
+        else (
+          let ppstate = dest_Some (fmap_lookup s0.pid_table pid) in
+          match ppstate.pid_run_state with 
+          | RUNNING -> (
+            let s0 = { s0 with pid_table=(fmap_remove s0.pid_table pid) } in
+            finset_singleton s0)
+          | _ -> finset_empty (* we don't allow processes to be destroyed if they are in kernel *)))
+      | _ -> finset_empty))
+            
+  (* assumes pid is in host pid_table *)
+  let os_trans ops s0 lblopt = (
+    (* process transitions *)
+    let pids = fmap_dom s0.pid_table in
+    let ss = finset_image (fun pid -> os_trans_pid ops s0 pid lblopt) pids in
+    let ss = finset_bigunion ss in
+    (* create/ destroy transitions *)
+    let ss = finset_union ss (os_trans_pcreate_destroy ops s0 lblopt) in
+    ss)
+  let (_:ty_ops' -> os_state' -> os_label option -> os_state' finset) = os_trans
+
+
+  (* convenience method to process a label; always choose first possible result (state,e+v) *)
+  let os_process_label ops s0 lblopt = (
+    let rs = os_trans ops s0 lblopt in
+    let _ = if rs = finset_empty then failwith "os_process_label: no result state" else () in
+    let s' = finset_choose rs in
+    s')
+
+  (* convenience method to process a list of labels *)
+  let os_process_labels ops s0 lbls = (
+    let f1 = (fun xs -> fun lbl -> 
+      let l = last xs in
+      let (_,_,s) = l in
+      let s' = os_process_label ops s lbl in
+      xs@[(List.length xs,lbl,s')])
+    in
+    let dummy_lbl = None in
+    List.fold_left f1 [(0,dummy_lbl,s0)] lbls)
+  let (_:ty_ops' -> os_state' -> os_label option list -> (int * os_label option * os_state') list) = os_process_labels
+
+end
+
 
 @fs_spec.md
 ## `Fs_spec_everything`
@@ -2002,7 +2252,8 @@ module Fs_spec_everything = struct
   include Resolve
   include Fs_ops2
   include Fs_ops3
-  include Transition_system
+  include Fs_transition_system
+  include Os_transition_system
 
 end
 
@@ -2025,10 +2276,9 @@ module Debug = struct
 *)
 
   let rec string_of_dir ops s0 dirname d0_ref = (
-    let Some(d0) = ops.lookup_dir s0 d0_ref in
-    let ns = ops.get_entries d0 in
+    let Names1(ns) = (ops.readdir1 s0 d0_ref).ret2 in
     let is_file ops s0 d0_ref n = (
-      let Some(e) = ops.resolve1 s0 d0_ref n in
+      let Some(e) = ops.resolve11 s0 d0_ref n in
       is_inode_ref_entry e)
     in
     let is_dir ops s0 d0_ref n = (not (is_file ops s0 d0_ref n)) in
@@ -2036,7 +2286,7 @@ module Debug = struct
     let this_dir = if ns <> [] then this_dir ^ "\n" else this_dir in
     let other_dirs = List.filter (fun n -> is_dir ops s0 d0_ref n) ns in
     let f1 n = (
-      let Some(e) = ops.resolve1 s0 d0_ref n in
+      let Some(e) = ops.resolve11 s0 d0_ref n in
       let d1_ref = dest_dir_ref_entry e in
       string_of_dir ops s0 (dirname ^ "/" ^ n) d1_ref)
     in
@@ -2047,7 +2297,7 @@ module Debug = struct
     
   (* assume no cycles *)
   let string_of_state ops s = (
-    let Some(d0_ref) = ops.get_root s in
+    let Some(d0_ref) = ops.get_root1 s in
     (string_of_dir ops s "/" d0_ref))
 
 end
@@ -2143,7 +2393,8 @@ module Extra_ops = struct
   open Prelude
   open Fs_types1
 
-  let process_label = Transition_system.process_label
+  let process_label = Fs_transition_system.process_label
+  let process_path_from_root = Resolve.process_path_from_root
 
 (*
   let kind_of_inode ops s0 i0 = (
@@ -2161,10 +2412,10 @@ module Extra_ops = struct
       kind_of_inode_ref ops s0 i0_ref))
 
   let kind_of_path ops s0 p = (
-    let rn = Resolve.process_path ops s0 p in
+    let rn = process_path_from_root ops s0 p in
     match rn with
-    | Dname2(_,_) -> S_DIR
-    | Fname2(i0_ref,_) -> (kind_of_inode_ref ops s0 i0_ref)
+    | Dname2 _ -> S_DIR
+    | Fname2(_,_,i0_ref,_) -> (kind_of_inode_ref ops s0 i0_ref)
     | _ -> (failwith ("kind_of_path, absent path: "^p)))
 
   let kind_of_name ops s0 d0_ref name = (
@@ -2173,9 +2424,9 @@ module Extra_ops = struct
 
   (* return a list of paths; p should point to a dir *)
   let ls_path ops s0 p = (
-    let rn = Resolve.process_path ops s0 p in
+    let rn = process_path_from_root ops s0 p in
     let Dname2(d0_ref,_) = rn in
-    let ns = name_list_of_rname2 rn in
+    let ns = name_list_of_res_name rn in
     let p = string_of_names ns.ns2 in
     let p = if p = "/" then "" else p in
     let Names1(es) = (ops.readdir1 s0 d0_ref).ret2 in
@@ -2190,13 +2441,15 @@ module Extra_ops = struct
     xs@xs')
 
   let read_all ops s0 p = (
-    let (_,Inr(Stats1(s))) = process_label ops s0 (STAT p) in
+    let pp = process_path_from_root ops s0 p in
+    let (_,Inr(Stats1(s))) = process_label ops s0 (FS_STAT pp) in
     let len = s.Unix.LargeFile.st_size in
-    let (_,Inr(Bytes1 bs)) = process_label ops s0 (READ(p,0,(* FIXME *)Int64.to_int len)) in
+    let (_,Inr(Bytes1 bs)) = process_label ops s0 (FS_READ(pp,0,(* FIXME *)Int64.to_int len)) in
     bs)
 
   let inode_of_path ops s0 p = (
-    let (_,Inr(Stats1(s))) = process_label ops s0 (STAT p) in
+    let pp = process_path_from_root ops s0 p in
+    let (_,Inr(Stats1(s))) = process_label ops s0 (FS_STAT pp) in
     s.Unix.LargeFile.st_ino)
 
 end

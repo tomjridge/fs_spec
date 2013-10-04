@@ -29,11 +29,22 @@ code > span.er { color: #ff0000; font-weight: bold; }
 <body>
 <div id="TOC">
 <ul>
+<li><a href="#interactive-top-level-directives">Interactive top-level directives</a></li>
 <li><a href="#dir_tree.ml"><code>dir_tree.ml</code></a><ul>
 <li><a href="#dir_tree_types-and-basic-operations"><code>Dir_tree_types</code> and basic operations</a></li>
 </ul></li>
 </ul>
 </div>
+<h1 id="interactive-top-level-directives"><a href="#interactive-top-level-directives">Interactive top-level directives</a></h1>
+<p>Via findlib:</p>
+<pre><code>#use &quot;topfind&quot;;;
+#require &quot;unix&quot;;;
+#require &quot;bigarray&quot;;;
+#require &quot;str&quot;;;
+(* #cd &quot;/tmp/l/general/research/fs/fs_spec/src&quot;;; *)
+#use &quot;fs_prelude.toplevel.ml&quot;;;
+#use &quot;fs_spec.toplevel.ml&quot;;;
+#use &quot;dir_tree.toplevel.ml&quot;;;</code></pre>
 <h1 id="dir_tree.ml"><a href="#dir_tree.ml"><code>dir_tree.ml</code></a></h1>
 <h2 id="dir_tree_types-and-basic-operations"><a href="#dir_tree_types-and-basic-operations"><code>Dir_tree_types</code> and basic operations</a></h2>
 <p>Types for a representation using an inode heap and a dir tree</p>
@@ -49,11 +60,24 @@ code > span.er { color: #ff0000; font-weight: bold; }
   <span class="ot">open</span> Prelude
   <span class="ot">open</span> Fs_types1 <span class="co">(* FIXME remove dependence? have a core types and a state types? *)</span>
 
-  <span class="co">(* dirs are represented by their path; obviously this isn&#39;t a real</span>
+  <span class="co">(* dirs are represented by their canonical paths; obviously this isn&#39;t a real</span>
 <span class="co">     reference, so won&#39;t work if dirs are renamed *)</span>
   <span class="kw">type</span> dir_ref = <span class="dt">string</span> <span class="dt">list</span>
   <span class="kw">let</span> dest_dir_ref s0 _ = 999
 
+  <span class="co">(* doesn&#39;t take into account actual state - only valid for actually existing dirs *)</span>
+  <span class="kw">let</span> <span class="kw">rec</span> realpath&#39; ns1 ns2 = (
+    <span class="kw">match</span> ns2 <span class="kw">with</span> 
+    | [] -&gt; ns1
+    | n::ns2 -&gt; (<span class="kw">match</span> n <span class="kw">with</span>
+      | <span class="st">&quot;&quot;</span> -&gt; (realpath&#39; ns1 ns2)
+      | <span class="st">&quot;.&quot;</span> -&gt; (realpath&#39; ns1 ns2)
+      | <span class="st">&quot;..&quot;</span> -&gt; (
+        <span class="kw">match</span> ns1 <span class="kw">with</span>
+        | [] -&gt; (realpath&#39; ns1 ns2)
+        | _ -&gt; (realpath&#39; (butlast ns1) ns2))
+      | _ -&gt; (realpath&#39; (ns1@[n]) ns2)))
+  <span class="kw">let</span> realpath ns = realpath&#39; [] ns    
 
   <span class="kw">type</span> inode_ref = <span class="dt">Inode_ref</span> <span class="kw">of</span> <span class="dt">int</span>
   <span class="kw">let</span> dest_inode_ref s0 (<span class="dt">Inode_ref</span> i) = i
@@ -179,6 +203,7 @@ code > span.er { color: #ff0000; font-weight: bold; }
 
   <span class="kw">let</span> ops1 = {
     get_init_state1=(<span class="kw">fun</span> () -&gt; state0);
+    get_parent1=(<span class="kw">fun</span> _ -&gt; <span class="kw">fun</span> d0_ref -&gt; <span class="kw">if</span> d0_ref = [] <span class="kw">then</span> (d0_ref,<span class="dt">None</span>) <span class="kw">else</span> (butlast d0_ref,<span class="dt">Some</span>(last d0_ref)));
     get_root1=(<span class="kw">fun</span> s0 -&gt; <span class="dt">Some[]</span>); <span class="co">(* []  is the dir ref for the root dir *)</span>
     dest_dir_ref1=dest_dir_ref;
     dest_inode_ref1=dest_inode_ref;
