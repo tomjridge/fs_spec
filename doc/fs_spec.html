@@ -34,7 +34,6 @@ code > span.er { color: #ff0000; font-weight: bold; }
 <li><a href="#fs_types1">Fs_types1</a></li>
 <li><a href="#resolve-names">Resolve names</a></li>
 <li><a href="#fs_ops2"><code>Fs_ops2</code></a></li>
-<li><a href="#fs_ops3"><code>Fs_ops3</code></a></li>
 <li><a href="#fs-transition-system">Fs transition system</a></li>
 <li><a href="#os-transition-system">OS transition system</a></li>
 <li><a href="#fs_spec_everything"><code>Fs_spec_everything</code></a></li>
@@ -985,113 +984,6 @@ open Fs_spec_everything;;</code></pre>
 <span class="co">  *)</span>
 
 <span class="kw">end</span></code></pre>
-<h2 id="fs_ops3"><a href="#fs_ops3"><code>Fs_ops3</code></a></h2>
-<p>This works in terms of strings; handles Err2 on resolving</p>
-<pre class="sourceCode ocaml"><code class="sourceCode ocaml">
-<span class="ot">module</span> Fs_ops3 = <span class="kw">struct</span> 
-
-  <span class="ot">open</span> Fs_types1
-  <span class="ot">open</span> Resolve
-  <span class="ot">open</span> Fs_ops2
-
-
-  <span class="co">(* for the purposes of type-checking the following defns without spurious type vars *)</span>
-  <span class="ot">module</span> X3 = <span class="kw">struct</span> 
-    <span class="kw">type</span> &#39;a ty_return3&#39; = (X<span class="kw">.</span>Y<span class="kw">.</span>t5,&#39;a) ty_return3
-    <span class="kw">type</span> &#39;a ty_mymonad&#39; = (X<span class="kw">.</span>Y<span class="kw">.</span>t5,&#39;a) mymonad
-    <span class="kw">type</span> res_name&#39; = (X<span class="kw">.</span>Y<span class="kw">.</span>t1,X<span class="kw">.</span>Y<span class="kw">.</span>t3) res_name    
-    <span class="co">(* type ty_ops&#39; = (X.Y.t1,X.Y.t2,X.Y.t3,X.Y.t4,X.Y.t5) ty_state_ops *)</span>
-    <span class="kw">type</span> ty_ops&#39; = (X<span class="kw">.</span>Y<span class="kw">.</span>t1,X<span class="kw">.</span>Y<span class="kw">.</span>t3,X<span class="kw">.</span>Y<span class="kw">.</span>t5) ty_ops1
-  <span class="kw">end</span>
-  <span class="ot">open</span> X3
-
-<span class="co">(*</span>
-
-<span class="co">  let link ops src dst = (</span>
-<span class="co">    get_state &gt;&gt;= fun s0 -&gt; </span>
-<span class="co">    let rsrc = process_path ops s0.fs_state4 s0.cwd4 src in</span>
-<span class="co">    let rdst = process_path ops s0.fs_state4 s0.cwd4 dst in</span>
-<span class="co">    Fs_ops2.link ops rsrc rdst)</span>
-
-<span class="co">  let mkdir ops path perms = (</span>
-<span class="co">    get_state &gt;&gt;= fun s0 -&gt;</span>
-<span class="co">    let rpath = process_path ops s0 path in</span>
-<span class="co">    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.mkdir ops rpath perms)</span>
-
-<span class="co">  let _open ops path flags = (</span>
-<span class="co">    get_state &gt;&gt;= fun s0 -&gt;</span>
-<span class="co">    let rpath = process_path ops s0 path in</span>
-<span class="co">    match rpath with</span>
-<span class="co">    | None2 _ -&gt; (myraise ENOENT)</span>
-<span class="co">    | Dname2(_,_) -&gt; (myraise ENOENT) (* FIXME should be EISDIR? can we open a dir? *)</span>
-<span class="co">    | _ -&gt; (return None1)) (* FIXME err case should raise an err? *)</span>
-<span class="co">  let (_:ty_ops&#39; -&gt; string -&gt; &#39;a -&gt; ret_value ty_mymonad&#39;) = _open</span>
-<span class="co"> </span>
-<span class="co">  (* open call returns an fd; but may have side effects; open create is one such call; FIXME what are others? *)</span>
-<span class="co">  let open_create ops path = (</span>
-<span class="co">    get_state &gt;&gt;= fun s0 -&gt;</span>
-<span class="co">    let rpath = process_path ops s0 path in</span>
-<span class="co">    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.open_create ops rpath)</span>
-
-<span class="co">  (* N.B. for read and write ofs is associated with fd, so presumably &lt; len of file *)</span>
-<span class="co">  let read ops path ofs len = (</span>
-<span class="co">    get_state &gt;&gt;= fun s0 -&gt;</span>
-<span class="co">    let rpath = process_path ops s0 path in</span>
-<span class="co">    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.read ops rpath ofs len)</span>
-<span class="co">  </span>
-<span class="co">  let readdir ops path = (</span>
-<span class="co">    get_state &gt;&gt;= fun s0 -&gt;</span>
-<span class="co">    let rpath = process_path ops s0 path in</span>
-<span class="co">    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.readdir ops rpath)</span>
-
-<span class="co">  (* FIXME check do_rename against ops2.rename; also check against doc in linux sys programming *)</span>
-<span class="co">  let rename ops src dst = (</span>
-<span class="co">    get_state &gt;&gt;= fun s0 -&gt; </span>
-<span class="co">    let rsrc = process_path ops s0 src in</span>
-<span class="co">    let rdst = process_path ops s0 dst in</span>
-<span class="co">    Fs_ops2.rename ops rsrc rdst)</span>
-<span class="co">  let (_:ty_ops&#39; -&gt; string -&gt; string -&gt; ret_value ty_mymonad&#39;) = rename</span>
-
-<span class="co">  let rmdir ops path = (</span>
-<span class="co">    get_state &gt;&gt;= fun s0 -&gt;</span>
-<span class="co">    let rpath = process_path ops s0 path in</span>
-<span class="co">    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.rmdir ops rpath)</span>
-
-<span class="co">  let stat ops path = (</span>
-<span class="co">    get_state &gt;&gt;= fun s0 -&gt;</span>
-<span class="co">    let rpath = process_path ops s0 path in</span>
-<span class="co">    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.stat ops rpath)</span>
-
-<span class="co">  let truncate ops path len = (</span>
-<span class="co">    get_state &gt;&gt;= fun s0 -&gt;</span>
-<span class="co">    let rpath = process_path ops s0 path in</span>
-<span class="co">    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.truncate ops rpath len)</span>
-
-<span class="co">  let unlink ops path = (</span>
-<span class="co">    get_state &gt;&gt;= fun s0 -&gt;</span>
-<span class="co">    let rpath = process_path ops s0 path in</span>
-<span class="co">    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.unlink ops rpath)</span>
-
-<span class="co">  let write ops path ofs bs len = (</span>
-<span class="co">    get_state &gt;&gt;= fun s0 -&gt;</span>
-<span class="co">    let rpath = process_path ops s0 path in</span>
-<span class="co">    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.write ops rpath ofs bs len)</span>
-
-<span class="co">  (* FIXME this is a hack - should do lots of checking eg src is a dir *)</span>
-<span class="co">  let symlink ops src dst = (</span>
-<span class="co">    open_create ops dst &gt;&gt;= fun _ -&gt; </span>
-<span class="co">    write ops dst 0 (MyDynArray.of_string src) (String.length src) &gt;&gt;= fun _ -&gt; </span>
-<span class="co">    get_state &gt;&gt;= fun s0 -&gt;</span>
-<span class="co">    let rpath = process_path ops s0 dst in</span>
-<span class="co">    let Fname2(i0_ref,_) = rpath in</span>
-<span class="co">    let r = ops.set_symlink1 s0 i0_ref true in</span>
-<span class="co">    put_state&#39; r)</span>
-<span class="co">  let (_:ty_ops&#39; -&gt; string -&gt; string -&gt; ret_value ty_mymonad&#39;) = symlink    </span>
-
-<span class="co">*)</span>
-
-<span class="kw">end</span>
-</code></pre>
 <h2 id="fs-transition-system"><a href="#fs-transition-system">Fs transition system</a></h2>
 <p>The model is of a labelled transition system from state to state, but where each transition may result in a return to userland (of a value or an error). FIXME need to be non-determinisitic eg in write and read behaviour.</p>
 <pre class="sourceCode ocaml"><code class="sourceCode ocaml">
@@ -1310,7 +1202,7 @@ open Fs_spec_everything;;</code></pre>
 <span class="co">(*  include Fs_ops1 *)</span>
   <span class="ot">include</span> Resolve
   <span class="ot">include</span> Fs_ops2
-  <span class="ot">include</span> Fs_ops3
+<span class="co">(*  include Fs_ops3 *)</span>
   <span class="ot">include</span> Fs_transition_system
   <span class="ot">include</span> Os_transition_system
 

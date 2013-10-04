@@ -1904,12 +1904,12 @@ module Fs_ops2 = struct
 
 end
 
-@fs_spec.md
+@ignore fs_spec.md
 ## `Fs_ops3`
 
 This works in terms of strings; handles Err2 on resolving 
 
-@fs_spec.ml
+@ignore fs_spec.ml
 
 module Fs_ops3 = struct 
 
@@ -2251,7 +2251,7 @@ module Fs_spec_everything = struct
 (*  include Fs_ops1 *)
   include Resolve
   include Fs_ops2
-  include Fs_ops3
+(*  include Fs_ops3 *)
   include Fs_transition_system
   include Os_transition_system
 

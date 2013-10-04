@@ -990,118 +990,6 @@ module Fs_ops2 = struct
 end
 
 (*
-## `Fs_ops3`
-
-This works in terms of strings; handles Err2 on resolving 
-
-*)
-
-module Fs_ops3 = struct 
-
-  open Fs_types1
-  open Resolve
-  open Fs_ops2
-
-
-  (* for the purposes of type-checking the following defns without spurious type vars *)
-  module X3 = struct 
-    type 'a ty_return3' = (X.Y.t5,'a) ty_return3
-    type 'a ty_mymonad' = (X.Y.t5,'a) mymonad
-    type res_name' = (X.Y.t1,X.Y.t3) res_name    
-    (* type ty_ops' = (X.Y.t1,X.Y.t2,X.Y.t3,X.Y.t4,X.Y.t5) ty_state_ops *)
-    type ty_ops' = (X.Y.t1,X.Y.t3,X.Y.t5) ty_ops1
-  end
-  open X3
-
-(*
-
-  let link ops src dst = (
-    get_state >>= fun s0 -> 
-    let rsrc = process_path ops s0.fs_state4 s0.cwd4 src in
-    let rdst = process_path ops s0.fs_state4 s0.cwd4 dst in
-    Fs_ops2.link ops rsrc rdst)
-
-  let mkdir ops path perms = (
-    get_state >>= fun s0 ->
-    let rpath = process_path ops s0 path in
-    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.mkdir ops rpath perms)
-
-  let _open ops path flags = (
-    get_state >>= fun s0 ->
-    let rpath = process_path ops s0 path in
-    match rpath with
-    | None2 _ -> (myraise ENOENT)
-    | Dname2(_,_) -> (myraise ENOENT) (* FIXME should be EISDIR? can we open a dir? *)
-    | _ -> (return None1)) (* FIXME err case should raise an err? *)
-  let (_:ty_ops' -> string -> 'a -> ret_value ty_mymonad') = _open
- 
-  (* open call returns an fd; but may have side effects; open create is one such call; FIXME what are others? *)
-  let open_create ops path = (
-    get_state >>= fun s0 ->
-    let rpath = process_path ops s0 path in
-    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.open_create ops rpath)
-
-  (* N.B. for read and write ofs is associated with fd, so presumably < len of file *)
-  let read ops path ofs len = (
-    get_state >>= fun s0 ->
-    let rpath = process_path ops s0 path in
-    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.read ops rpath ofs len)
-  
-  let readdir ops path = (
-    get_state >>= fun s0 ->
-    let rpath = process_path ops s0 path in
-    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.readdir ops rpath)
-
-  (* FIXME check do_rename against ops2.rename; also check against doc in linux sys programming *)
-  let rename ops src dst = (
-    get_state >>= fun s0 -> 
-    let rsrc = process_path ops s0 src in
-    let rdst = process_path ops s0 dst in
-    Fs_ops2.rename ops rsrc rdst)
-  let (_:ty_ops' -> string -> string -> ret_value ty_mymonad') = rename
-
-  let rmdir ops path = (
-    get_state >>= fun s0 ->
-    let rpath = process_path ops s0 path in
-    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.rmdir ops rpath)
-
-  let stat ops path = (
-    get_state >>= fun s0 ->
-    let rpath = process_path ops s0 path in
-    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.stat ops rpath)
-
-  let truncate ops path len = (
-    get_state >>= fun s0 ->
-    let rpath = process_path ops s0 path in
-    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.truncate ops rpath len)
-
-  let unlink ops path = (
-    get_state >>= fun s0 ->
-    let rpath = process_path ops s0 path in
-    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.unlink ops rpath)
-
-  let write ops path ofs bs len = (
-    get_state >>= fun s0 ->
-    let rpath = process_path ops s0 path in
-    if (is_Err2 rpath) then (myraise ENOTDIR) else Fs_ops2.write ops rpath ofs bs len)
-
-  (* FIXME this is a hack - should do lots of checking eg src is a dir *)
-  let symlink ops src dst = (
-    open_create ops dst >>= fun _ -> 
-    write ops dst 0 (MyDynArray.of_string src) (String.length src) >>= fun _ -> 
-    get_state >>= fun s0 ->
-    let rpath = process_path ops s0 dst in
-    let Fname2(i0_ref,_) = rpath in
-    let r = ops.set_symlink1 s0 i0_ref true in
-    put_state' r)
-  let (_:ty_ops' -> string -> string -> ret_value ty_mymonad') = symlink    
-
-*)
-
-end
-
-
-(*
 ## Fs transition system
 
 The model is of a labelled transition system from state to state, but
@@ -1336,7 +1224,7 @@ module Fs_spec_everything = struct
 (*  include Fs_ops1 *)
   include Resolve
   include Fs_ops2
-  include Fs_ops3
+(*  include Fs_ops3 *)
   include Fs_transition_system
   include Os_transition_system
 
