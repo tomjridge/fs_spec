@@ -525,42 +525,7 @@ open Fs_spec_everything;;</code></pre>
 
 <span class="kw">end</span></code></pre>
 <h2 id="fs_ops2"><a href="#fs_ops2"><code>Fs_ops2</code></a></h2>
-<p>Fs ops is very precise about what each argument is expected to be. Dirnames start and end in <code>/</code>. Filenames must not end in <code>/</code>. We don't check that the target of a <code>mv</code> is empty, or doesn't exist etc. However, at the command line, there is some ambiguity:</p>
-<ul>
-<li><p>assuming <code>tmp.txt</code> is a file, then <code>mv tmp.txt d</code> will treat <code>d</code> as a file (if no d exists), or as a dir (if d exists and is a dir)</p></li>
-<li><p><code>mv tmp.txt d/</code> will treat <code>d/</code> as a dir always</p></li>
-</ul>
-<p>So some possible sources of ambiguity are:</p>
-<ul>
-<li><p>is <code>tmp.txt</code> a file or a directory? (if it exists, then it is whatever it is)</p></li>
-<li><p>if we mean a dir, we can add a '/', and this makes clear what we mean; if we don't add a '/' then the fs may not know whether we intend a file or directory</p></li>
-<li><p>even if we are clear that we mean a dir, there can be multiple interpretations: <code>mv c/ e/</code> renames c to e, providing e doesn't already exist; if e does exist, then c goes into e</p></li>
-<li><p><code>mv c/ e/</code> will overwrite a directory <code>e/c</code> if <code>e/c</code> is empty; will fail if <code>e/c</code> is not empty</p></li>
-</ul>
-<p>At the user level, there is some extra logic which makes commands behave differently eg if the target is absent, or a file, or a directory eg for the command <code>mv src dst</code></p>
-<ul>
-<li><p>if src is a file, and dst is a dir, then src is moved into dir</p></li>
-<li><p>if src if a file and dst is a file, then src is moved over dst (dst is unlinked)</p></li>
-<li><p>if src is a dir and dst is a dir, then</p></li>
-</ul>
-<p>Some criteria:</p>
-<ul>
-<li><p>src,dst ends in '/'</p></li>
-<li><p>src,dst exists/not exists (but how to connect name to entity? the point is that this connection is heuristic in some sense; proposal: given a fordname, check whether a dir exists with that name; if not, attempt to interpret as file)</p></li>
-<li><p>src,dst exists and is a file/ is a dir</p></li>
-</ul>
-<p>Proposed <code>mv</code> processing stages:</p>
-<ol style="list-style-type: decimal">
-<li><p>if either src or dst is fordname (no trailing /) then try to disambiguate: if directory src exists, then src is a dirname, otherwise filename; from this point onwards, we use &quot;src&quot; to indicate a filename, and &quot;src/&quot; to indicate a dirname</p>
-<p><code>mv src dst/</code>: move file src to dst directory; if src doesn't exist, fail; if dst directory doesn't exist, fail</p>
-<p><code>mv src/ dst</code>: move directory src to directory dst; dst directory doesn't exist by disambiguation (otherwise the command would have been interpreted as <code>mv src/ dst/</code>); fail if src doesn't exist</p>
-<p><code>mv src dst</code>: move file src to file dst; if src doesn't exist, fail</p>
-<p><code>mv src/ dst/</code>: if <code>dst</code> exists, then attempt to move dir src to a subdirectory of dst; if <code>dst/src</code> file exists, overwrite; if <code>dst/src</code> dir exists, and is empty, then do the move, otherwise fail</p></li>
-</ol>
-<p>Note: these options don't even include checking whether src and dst are soft links (which further complicates matters; FIXME we don't deal with soft links at this stage)</p>
-<p>For the moment, we content ourselves with the following horrible code...</p>
-<p>For <code>Fs_ops2</code> we provide functions from state to Inl of state * err, or Inr of state * ret</p>
-<p>--</p>
+<p>This is the main part of the spec. If a transition succeeds, it calls a method such as <code>ops1.mv1</code> to actually make a change in the underlying state. Most of the stuff below involves dealing with all the error cases.</p>
 <p>Invariant: if any exception is raised, the state is not changed</p>
 <pre class="sourceCode ocaml"><code class="sourceCode ocaml">
 <span class="co">(* FIXME these work in terms of rnames; assumes no Err2 *)</span>

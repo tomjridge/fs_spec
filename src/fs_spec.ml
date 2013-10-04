@@ -503,59 +503,10 @@ end
 (*
 ## `Fs_ops2`
 
-Fs ops is very precise about what each argument is expected to be. Dirnames start and end in `/`. Filenames must not end in `/`. We don't check that the target of a `mv` is empty, or doesn't exist etc. However, at the command line, there is some ambiguity:
-
-  * assuming `tmp.txt` is a file, then `mv tmp.txt d` will treat `d` as a file (if no d exists), or as a dir (if d exists and is a dir)
-
-  * `mv tmp.txt d/` will treat `d/` as a dir always
-
-So some possible sources of ambiguity are:
- 
-  * is `tmp.txt` a file or a directory? (if it exists, then it is whatever it is)
-
-  * if we mean a dir, we can add a '/', and this makes clear what we mean; if we don't add a '/' then the fs may not know whether we intend a file or directory
-
-  * even if we are clear that we mean a dir, there can be multiple interpretations: `mv c/ e/` renames c to e, providing e doesn't already exist; if e does exist, then c goes into e
-
-  * `mv c/ e/` will overwrite a directory `e/c` if `e/c` is empty; will fail if `e/c` is not empty
-
-At the user level, there is some extra logic which makes commands behave differently eg if the target is absent, or a file, or a directory eg for the command `mv src dst`
-
-  * if src is a file, and dst is a dir, then src is moved into dir
-
-  * if src if a file and dst is a file, then src is moved over dst (dst is unlinked)
-
-  * if src is a dir and dst is a dir, then 
-
-Some criteria: 
-
-  * src,dst ends in '/'
-
-  * src,dst exists/not exists  (but how to connect name to entity? the point is that this connection is heuristic in some sense; proposal: given a fordname, check whether a dir exists with that name; if not, attempt to interpret as file)
-
-  * src,dst exists and is a file/ is a dir
-
-
-Proposed `mv` processing stages:
-
- 1. if either src or dst is fordname (no trailing /) then try to disambiguate: if directory src exists, then src is a dirname, otherwise filename; from this point onwards, we use "src" to indicate a filename, and "src/" to indicate a dirname
-
-    `mv src dst/`: move file src to dst directory; if src doesn't exist, fail; if dst directory doesn't exist, fail
-
-    `mv src/ dst`: move directory src to directory dst; dst directory doesn't exist by disambiguation (otherwise the command would have been interpreted as `mv src/ dst/`); fail if src doesn't exist
-
-    `mv src dst`: move file src to file dst; if src doesn't exist, fail
-
-    `mv src/ dst/`: if `dst` exists, then attempt to move dir src to a subdirectory of dst; if `dst/src` file exists, overwrite; if `dst/src` dir exists, and is empty, then do the move, otherwise fail
-
-
-Note: these options don't even include checking whether src and dst are soft links (which further complicates matters; FIXME we don't deal with soft links at this stage)
-
-For the moment, we content ourselves with the following horrible code...
-
-For `Fs_ops2` we provide functions from state to Inl of state * err, or Inr of state * ret
-
---
+This is the main part of the spec. If a transition succeeds, it calls
+a method such as `ops1.mv1` to actually make a change in the
+underlying state. Most of the stuff below involves dealing with all
+the error cases.
 
 Invariant: if any exception is raised, the state is not changed
 
