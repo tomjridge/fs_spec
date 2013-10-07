@@ -147,6 +147,8 @@ module MyDynArray2 = struct
   (* i is the length of the dynamic array, given some implementation; invariant (i,arr): i <= dim arr *)
   type t = int * MyDynArray1.t
 
+  type mynewtypefixme = int
+
   let repn (i,arr) = (i,arr)
 
   let dim (i,arr) = i

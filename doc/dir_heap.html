@@ -101,7 +101,7 @@ code > span.er { color: #ff0000; font-weight: bold; }
 
   <span class="kw">type</span> dir = {
     dentries:entries;
-    parent1:(dir_ref * name <span class="dt">option</span>) <span class="dt">option</span> <span class="co">(* FIXME do we want to allow this? *)</span>
+    parent1:(dir_ref * name) <span class="dt">option</span> <span class="co">(* FIXME do we want to allow this? *)</span>
   }
 
   <span class="kw">type</span> inode = {
@@ -231,7 +231,7 @@ code > span.er { color: #ff0000; font-weight: bold; }
 
   <span class="kw">let</span> state0 = (
     <span class="co">(* an initial state with a root dir *)</span>
-    <span class="kw">let</span> root = (<span class="dt">Dir_ref</span> 0, { dentries=Entries.empty; parent1=(<span class="dt">Some</span>(<span class="dt">Dir_ref</span> 0,<span class="dt">None</span>)) }) <span class="kw">in</span>
+    <span class="kw">let</span> root = (<span class="dt">Dir_ref</span> 0, { dentries=Entries.empty; parent1=(<span class="dt">None</span>) }) <span class="kw">in</span>
     <span class="kw">let</span> s0 = update_drs_some state0&#39; root <span class="kw">in</span>
     s0)  
 
@@ -297,7 +297,7 @@ code > span.er { color: #ff0000; font-weight: bold; }
     dest_inode_ref: &#39;state -&gt; &#39;inode_ref -&gt; <span class="dt">int</span>;
     dest_dir_ref: &#39;state -&gt; &#39;dir_ref -&gt; <span class="dt">int</span>;
     get_entries: &#39;dir -&gt; name <span class="dt">list</span>; <span class="co">(* FIXME &#39;dir -&gt; name list ? *)</span>
-    with_parent: &#39;dir -&gt; (&#39;dir_ref * name <span class="dt">option</span>) -&gt; &#39;dir
+    with_parent: &#39;dir -&gt; (&#39;dir_ref * name) -&gt; &#39;dir
   }
 
 
@@ -325,7 +325,7 @@ code > span.er { color: #ff0000; font-weight: bold; }
   <span class="co">(* link directory d1 into d0 under name *)</span>
   <span class="kw">let</span> internal_link_dir ops s0 d0_ref d1_ref name = (
     <span class="kw">let</span> d1 = dest_Some(ops.lookup_dir s0 d1_ref) <span class="kw">in</span>
-    <span class="kw">let</span> d1 = ops.with_parent d1 (d0_ref,<span class="dt">Some</span>(name)) <span class="kw">in</span>
+    <span class="kw">let</span> d1 = ops.with_parent d1 (d0_ref,name) <span class="kw">in</span>
     <span class="kw">let</span> s0 = ops.update_dirs_some s0 (d1_ref,d1) <span class="kw">in</span>
     <span class="kw">let</span> s0 = ops.update_ents_pointwise s0 d0_ref name (<span class="dt">Some</span>(<span class="dt">Inl</span>(d1_ref))) <span class="kw">in</span>
     s0)
@@ -488,14 +488,14 @@ end
       <span class="kw">let</span> es0 = d0.dentries <span class="kw">in</span>
       <span class="kw">let</span> binds = Entries<span class="kw">.</span>bindings es0 <span class="kw">in</span>
       (List<span class="kw">.</span>map fst binds));
-    with_parent=(<span class="kw">fun</span> d0 -&gt; <span class="kw">fun</span> (d1_ref,nopt) -&gt; { d0 <span class="kw">with</span> parent1=(<span class="dt">Some</span>(d1_ref,nopt)) })
+    with_parent=(<span class="kw">fun</span> d0 -&gt; <span class="kw">fun</span> (d1_ref,n) -&gt; { d0 <span class="kw">with</span> parent1=(<span class="dt">Some</span>(d1_ref,n)) })
   }
 
   <span class="kw">let</span> ops1 = {
     get_init_state1=(<span class="kw">fun</span> () -&gt; state0);
     get_parent1=(<span class="kw">fun</span> s0 -&gt; <span class="kw">fun</span> d0_ref -&gt; 
       <span class="kw">let</span> d0 = dest_Some(ops.lookup_dir s0 d0_ref) <span class="kw">in</span>
-      dest_Some(d0.parent1)); <span class="co">(* FIXME do we always know this will return something? disconnected dirs? *)</span>
+      (d0.parent1)); <span class="co">(* FIXME do we always know this will return something? disconnected dirs? *)</span>
     get_root1=(<span class="kw">fun</span> s0 -&gt; <span class="dt">Some</span> (get_root s0));
     dest_dir_ref1=dest_dir_ref;
     dest_inode_ref1=dest_inode_ref;

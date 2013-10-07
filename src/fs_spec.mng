@@ -323,6 +323,8 @@ module MyDynArray2 = struct
   (* i is the length of the dynamic array, given some implementation; invariant (i,arr): i <= dim arr *)
   type t = int * MyDynArray1.t
 
+  type mynewtypefixme = int
+
   let repn (i,arr) = (i,arr)
 
   let dim (i,arr) = i
@@ -1159,7 +1161,7 @@ module Fs_types1 = struct
 
   type ('dir_ref,'inode_ref,'impl) ty_ops1 = {
     get_init_state1: unit -> 'impl;
-    get_parent1: 'impl -> 'dir_ref -> ('dir_ref * name option); (* parent of root is root; name is none iff root  *)
+    get_parent1: 'impl -> 'dir_ref -> ('dir_ref * name) option; (* if root, parent is none; possibly disconnected dirs can also have no parent *)
     get_root1: 'impl -> 'dir_ref option;
     dest_dir_ref1: 'impl -> 'dir_ref -> int;
     dest_inode_ref1: 'impl -> 'inode_ref -> int;
@@ -1305,8 +1307,8 @@ module Resolve = struct
   (* get the real path, given a dir_ref *)
   let rec real_path_dir_ref ops s0 d0_ref = (
     match (ops.get_parent1 s0 d0_ref) with
-    | (d1_ref,None) -> [""]
-    | (d1_ref,Some n) -> (real_path_dir_ref ops s0 d1_ref)@[n])
+    | None -> [""]
+    | Some(d1_ref,n) -> (real_path_dir_ref ops s0 d1_ref)@[n])
 
   type ('dir_ref,'inode_ref) ty_resolve_relative_ok = 
   | Dir4 of 'dir_ref
@@ -1320,8 +1322,9 @@ module Resolve = struct
       if (n=".") || (n="") then (
         resolve_relative ops s0 sofar ns
       ) else if (n="..") then (
-        let (dir_ref,_) = ops.get_parent1 s0 sofar in
-        resolve_relative ops s0 dir_ref ns
+        match ops.get_parent1 s0 sofar with
+        | None -> (resolve_relative ops s0 sofar ns) (* FIXME not correct for disconnected dirs *)
+        | Some(dir_ref,_) -> (resolve_relative ops s0 dir_ref ns)
       ) else (
         let m = ops.resolve11 s0 sofar n in
         match m with 
@@ -1701,11 +1704,11 @@ module Fs_ops2 = struct
         else
           let p = ops.get_parent1 s0 d0_ref in
           match p with 
-          | (d0_ref,Some nsrc) -> (
-            put_state'' (fun () -> ops.mvdir1 s0 d0_ref nsrc d1_ref ndst))
-          | (d0_ref,None) -> ( 
+          | None -> (
             (* src was root *)
-            myraise EINVAL))
+            myraise EINVAL)
+          | Some(d0_ref,nsrc) -> (
+            put_state'' (fun () -> ops.mvdir1 s0 d0_ref nsrc d1_ref ndst)))
       | Err2 (e,_) -> (
         (maybe_raise EINVAL) >>= (fun _ -> (* tr/7 confirmed non-posix behaviour *)
         myraise e))
@@ -1729,16 +1732,14 @@ module Fs_ops2 = struct
         (* otherwise target dir is empty; do rename; FIXME presumably root, if empty, can't be target unless src=root *)
         (* FIXME with the unix backend, we really don't want to execute this last because we know we are going to raise an error; but we must allow for future stages to raise further exceptions *)
         else
-          let (d0_ref',x) = ops.get_parent1 s0 d0_ref in
-          let (d1_ref',y) = ops.get_parent1 s0 d1_ref in
-          match x with
-          | None -> (myraise EINVAL)
-          | Some nsrc -> (
-            match y with 
-            | None -> (
-              failwith "impossible rename of dir onto root; can't happen because dst must be nonempty")
-            | Some ndst -> (
-              put_state'' (fun () -> ops.mvdir1 s0 d0_ref' nsrc d1_ref' ndst)))))))
+          let x = ops.get_parent1 s0 d0_ref in
+          let y = ops.get_parent1 s0 d1_ref in
+          match (x,y) with
+          | (None,_) -> (myraise EINVAL)
+          | (_,None) -> (
+            failwith "impossible rename of dir onto root; can't happen because dst must be nonempty")
+          | (Some(d0_ref',nsrc),Some(d1_ref',ndst)) -> (
+            put_state'' (fun () -> ops.mvdir1 s0 d0_ref' nsrc d1_ref' ndst))))))
   let (_:ty_ops' -> res_name' -> res_name' -> ret_value ty_mymonad') = rename      
 
   let rmdir ops rpath = (
@@ -1748,13 +1749,13 @@ module Fs_ops2 = struct
       if ((ops.readdir1 s0 d0_ref).ret2<>Names1[]) then
         (myraise ENOTEMPTY)
       else
-        let (d1_ref,x) = ops.get_parent1 s0 d0_ref in
+        let x = ops.get_parent1 s0 d0_ref in
         match x with 
         | None -> (
           (* attempt to remove the root directory, may fail or succeed *)
           (maybe_raise EBUSY) >>= (fun _ ->
             (return None1)))
-        | Some n -> (
+        | Some(d1_ref,n) -> (
           let s0 = ops.unlink1 s0 d1_ref n in
           put_state' s0))
     | Fname2 _ -> (myraise ENOTDIR)
@@ -1791,7 +1792,7 @@ module Fs_ops2 = struct
     match rpath with 
     | Err2(e,_) -> (myraise e)
     | None2 _ -> (myraise ENOENT)
-    | Dname2 _ -> (myraise EISDIR)
+    | Dname2 _ -> (myraise EISDIR) (* LSB has EISDIR; POSIX requires EPERM *)
     | Fname2(d0_ref,n,i0_ref,rp) -> (
       (* FIXME for resolving a file, often useful to have dir ref as well *)
       let s0 = ops.unlink1 s0 d0_ref n in

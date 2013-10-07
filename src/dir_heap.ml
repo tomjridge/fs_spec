@@ -72,7 +72,7 @@ module Dir_heap_types = struct
 
   type dir = {
     dentries:entries;
-    parent1:(dir_ref * name option) option (* FIXME do we want to allow this? *)
+    parent1:(dir_ref * name) option (* FIXME do we want to allow this? *)
   }
 
   type inode = {
@@ -202,7 +202,7 @@ module Dir_heap_types = struct
 
   let state0 = (
     (* an initial state with a root dir *)
-    let root = (Dir_ref 0, { dentries=Entries.empty; parent1=(Some(Dir_ref 0,None)) }) in
+    let root = (Dir_ref 0, { dentries=Entries.empty; parent1=(None) }) in
     let s0 = update_drs_some state0' root in
     s0)  
 
@@ -274,7 +274,7 @@ module Fs_ops1 = struct
     dest_inode_ref: 'state -> 'inode_ref -> int;
     dest_dir_ref: 'state -> 'dir_ref -> int;
     get_entries: 'dir -> name list; (* FIXME 'dir -> name list ? *)
-    with_parent: 'dir -> ('dir_ref * name option) -> 'dir
+    with_parent: 'dir -> ('dir_ref * name) -> 'dir
   }
 
 
@@ -303,7 +303,7 @@ module Fs_ops1 = struct
   (* link directory d1 into d0 under name *)
   let internal_link_dir ops s0 d0_ref d1_ref name = (
     let d1 = dest_Some(ops.lookup_dir s0 d1_ref) in
-    let d1 = ops.with_parent d1 (d0_ref,Some(name)) in
+    let d1 = ops.with_parent d1 (d0_ref,name) in
     let s0 = ops.update_dirs_some s0 (d1_ref,d1) in
     let s0 = ops.update_ents_pointwise s0 d0_ref name (Some(Inl(d1_ref))) in
     s0)
@@ -483,14 +483,14 @@ module Dir_heap_ops = struct
       let es0 = d0.dentries in
       let binds = Entries.bindings es0 in
       (List.map fst binds));
-    with_parent=(fun d0 -> fun (d1_ref,nopt) -> { d0 with parent1=(Some(d1_ref,nopt)) })
+    with_parent=(fun d0 -> fun (d1_ref,n) -> { d0 with parent1=(Some(d1_ref,n)) })
   }
 
   let ops1 = {
     get_init_state1=(fun () -> state0);
     get_parent1=(fun s0 -> fun d0_ref -> 
       let d0 = dest_Some(ops.lookup_dir s0 d0_ref) in
-      dest_Some(d0.parent1)); (* FIXME do we always know this will return something? disconnected dirs? *)
+      (d0.parent1)); (* FIXME do we always know this will return something? disconnected dirs? *)
     get_root1=(fun s0 -> Some (get_root s0));
     dest_dir_ref1=dest_dir_ref;
     dest_inode_ref1=dest_inode_ref;

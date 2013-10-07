@@ -277,7 +277,7 @@ open Fs_spec_everything;;</code></pre>
 
   <span class="kw">type</span> (&#39;dir_ref,&#39;inode_ref,&#39;impl) ty_ops1 = {
     get_init_state1: <span class="dt">unit</span> -&gt; &#39;impl;
-    get_parent1: &#39;impl -&gt; &#39;dir_ref -&gt; (&#39;dir_ref * name <span class="dt">option</span>); <span class="co">(* parent of root is root; name is none iff root  *)</span>
+    get_parent1: &#39;impl -&gt; &#39;dir_ref -&gt; (&#39;dir_ref * name) <span class="dt">option</span>; <span class="co">(* if root, parent is none; possibly disconnected dirs can also have no parent *)</span>
     get_root1: &#39;impl -&gt; &#39;dir_ref <span class="dt">option</span>;
     dest_dir_ref1: &#39;impl -&gt; &#39;dir_ref -&gt; <span class="dt">int</span>;
     dest_inode_ref1: &#39;impl -&gt; &#39;inode_ref -&gt; <span class="dt">int</span>;
@@ -414,8 +414,8 @@ open Fs_spec_everything;;</code></pre>
   <span class="co">(* get the real path, given a dir_ref *)</span>
   <span class="kw">let</span> <span class="kw">rec</span> real_path_dir_ref ops s0 d0_ref = (
     <span class="kw">match</span> (ops.get_parent1 s0 d0_ref) <span class="kw">with</span>
-    | (d1_ref,<span class="dt">None</span>) -&gt; [<span class="st">&quot;&quot;</span>]
-    | (d1_ref,<span class="dt">Some</span> n) -&gt; (real_path_dir_ref ops s0 d1_ref)@[n])
+    | <span class="dt">None</span> -&gt; [<span class="st">&quot;&quot;</span>]
+    | <span class="dt">Some</span>(d1_ref,n) -&gt; (real_path_dir_ref ops s0 d1_ref)@[n])
 
   <span class="kw">type</span> (&#39;dir_ref,&#39;inode_ref) ty_resolve_relative_ok = 
   | <span class="dt">Dir4</span> <span class="kw">of</span> &#39;dir_ref
@@ -429,8 +429,9 @@ open Fs_spec_everything;;</code></pre>
       <span class="kw">if</span> (n=<span class="st">&quot;.&quot;</span>) || (n=<span class="st">&quot;&quot;</span>) <span class="kw">then</span> (
         resolve_relative ops s0 sofar ns
       ) <span class="kw">else</span> <span class="kw">if</span> (n=<span class="st">&quot;..&quot;</span>) <span class="kw">then</span> (
-        <span class="kw">let</span> (dir_ref,_) = ops.get_parent1 s0 sofar <span class="kw">in</span>
-        resolve_relative ops s0 dir_ref ns
+        <span class="kw">match</span> ops.get_parent1 s0 sofar <span class="kw">with</span>
+        | <span class="dt">None</span> -&gt; (resolve_relative ops s0 sofar ns) <span class="co">(* FIXME not correct for disconnected dirs *)</span>
+        | <span class="dt">Some</span>(dir_ref,_) -&gt; (resolve_relative ops s0 dir_ref ns)
       ) <span class="kw">else</span> (
         <span class="kw">let</span> m = ops.resolve11 s0 sofar n <span class="kw">in</span>
         <span class="kw">match</span> m <span class="kw">with</span> 
@@ -801,11 +802,11 @@ open Fs_spec_everything;;</code></pre>
         <span class="kw">else</span>
           <span class="kw">let</span> p = ops.get_parent1 s0 d0_ref <span class="kw">in</span>
           <span class="kw">match</span> p <span class="kw">with</span> 
-          | (d0_ref,<span class="dt">Some</span> nsrc) -&gt; (
-            put_state&#39;&#39; (<span class="kw">fun</span> () -&gt; ops.mvdir1 s0 d0_ref nsrc d1_ref ndst))
-          | (d0_ref,<span class="dt">None</span>) -&gt; ( 
+          | <span class="dt">None</span> -&gt; (
             <span class="co">(* src was root *)</span>
-            myraise <span class="dt">EINVAL</span>))
+            myraise <span class="dt">EINVAL</span>)
+          | <span class="dt">Some</span>(d0_ref,nsrc) -&gt; (
+            put_state&#39;&#39; (<span class="kw">fun</span> () -&gt; ops.mvdir1 s0 d0_ref nsrc d1_ref ndst)))
       | <span class="dt">Err2</span> (e,_) -&gt; (
         (maybe_raise <span class="dt">EINVAL</span>) &gt;&gt;= (<span class="kw">fun</span> _ -&gt; <span class="co">(* tr/7 confirmed non-posix behaviour *)</span>
         myraise e))
@@ -829,16 +830,14 @@ open Fs_spec_everything;;</code></pre>
         <span class="co">(* otherwise target dir is empty; do rename; FIXME presumably root, if empty, can&#39;t be target unless src=root *)</span>
         <span class="co">(* FIXME with the unix backend, we really don&#39;t want to execute this last because we know we are going to raise an error; but we must allow for future stages to raise further exceptions *)</span>
         <span class="kw">else</span>
-          <span class="kw">let</span> (d0_ref&#39;,x) = ops.get_parent1 s0 d0_ref <span class="kw">in</span>
-          <span class="kw">let</span> (d1_ref&#39;,y) = ops.get_parent1 s0 d1_ref <span class="kw">in</span>
-          <span class="kw">match</span> x <span class="kw">with</span>
-          | <span class="dt">None</span> -&gt; (myraise <span class="dt">EINVAL</span>)
-          | <span class="dt">Some</span> nsrc -&gt; (
-            <span class="kw">match</span> y <span class="kw">with</span> 
-            | <span class="dt">None</span> -&gt; (
-              failwith <span class="st">&quot;impossible rename of dir onto root; can&#39;t happen because dst must be nonempty&quot;</span>)
-            | <span class="dt">Some</span> ndst -&gt; (
-              put_state&#39;&#39; (<span class="kw">fun</span> () -&gt; ops.mvdir1 s0 d0_ref&#39; nsrc d1_ref&#39; ndst)))))))
+          <span class="kw">let</span> x = ops.get_parent1 s0 d0_ref <span class="kw">in</span>
+          <span class="kw">let</span> y = ops.get_parent1 s0 d1_ref <span class="kw">in</span>
+          <span class="kw">match</span> (x,y) <span class="kw">with</span>
+          | (<span class="dt">None</span>,_) -&gt; (myraise <span class="dt">EINVAL</span>)
+          | (_,<span class="dt">None</span>) -&gt; (
+            failwith <span class="st">&quot;impossible rename of dir onto root; can&#39;t happen because dst must be nonempty&quot;</span>)
+          | (<span class="dt">Some</span>(d0_ref&#39;,nsrc),<span class="dt">Some</span>(d1_ref&#39;,ndst)) -&gt; (
+            put_state&#39;&#39; (<span class="kw">fun</span> () -&gt; ops.mvdir1 s0 d0_ref&#39; nsrc d1_ref&#39; ndst))))))
   <span class="kw">let</span> (_:ty_ops&#39; -&gt; res_name&#39; -&gt; res_name&#39; -&gt; ret_value ty_mymonad&#39;) = rename      
 
   <span class="kw">let</span> rmdir ops rpath = (
@@ -848,13 +847,13 @@ open Fs_spec_everything;;</code></pre>
       <span class="kw">if</span> ((ops.readdir1 s0 d0_ref).ret2&lt;&gt;Names1[]) <span class="kw">then</span>
         (myraise <span class="dt">ENOTEMPTY</span>)
       <span class="kw">else</span>
-        <span class="kw">let</span> (d1_ref,x) = ops.get_parent1 s0 d0_ref <span class="kw">in</span>
+        <span class="kw">let</span> x = ops.get_parent1 s0 d0_ref <span class="kw">in</span>
         <span class="kw">match</span> x <span class="kw">with</span> 
         | <span class="dt">None</span> -&gt; (
           <span class="co">(* attempt to remove the root directory, may fail or succeed *)</span>
           (maybe_raise <span class="dt">EBUSY</span>) &gt;&gt;= (<span class="kw">fun</span> _ -&gt;
             (return <span class="dt">None1</span>)))
-        | <span class="dt">Some</span> n -&gt; (
+        | <span class="dt">Some</span>(d1_ref,n) -&gt; (
           <span class="kw">let</span> s0 = ops.unlink1 s0 d1_ref n <span class="kw">in</span>
           put_state&#39; s0))
     | <span class="dt">Fname2</span> _ -&gt; (myraise <span class="dt">ENOTDIR</span>)
@@ -891,7 +890,7 @@ open Fs_spec_everything;;</code></pre>
     <span class="kw">match</span> rpath <span class="kw">with</span> 
     | <span class="dt">Err2</span>(e,_) -&gt; (myraise e)
     | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>)
-    | <span class="dt">Dname2</span> _ -&gt; (myraise <span class="dt">EISDIR</span>)
+    | <span class="dt">Dname2</span> _ -&gt; (myraise <span class="dt">EISDIR</span>) <span class="co">(* LSB has EISDIR; POSIX requires EPERM *)</span>
     | <span class="dt">Fname2</span>(d0_ref,n,i0_ref,rp) -&gt; (
       <span class="co">(* FIXME for resolving a file, often useful to have dir ref as well *)</span>
       <span class="kw">let</span> s0 = ops.unlink1 s0 d0_ref n <span class="kw">in</span>

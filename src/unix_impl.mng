@@ -443,7 +443,7 @@ module Unix_impl_everything = struct
 
   let ops1 = {
     get_init_state1=(fun () -> state0);
-    get_parent1=(fun _ -> fun d0_ref -> if d0_ref = [] then (d0_ref,None) else (butlast d0_ref,Some(last d0_ref)));
+    get_parent1=(fun _ -> fun d0_ref -> if d0_ref = [] then None else Some(butlast d0_ref,last d0_ref));
     get_root1=(fun s0 -> Some[]); (* []  is the dir ref for the root dir *)
     dest_dir_ref1=dest_dir_ref;
     dest_inode_ref1=dest_inode_ref;
