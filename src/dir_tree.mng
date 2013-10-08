@@ -40,6 +40,7 @@ module Dir_tree_types = struct
   let dest_dir_ref s0 _ = 999
 
   (* doesn't take into account actual state - only valid for actually existing dirs *)
+  (* in fact we don't need this - the only way to get a dir ref is to use functions which effectively give a realpath
   let rec realpath' ns1 ns2 = (
     match ns2 with 
     | [] -> ns1
@@ -52,6 +53,7 @@ module Dir_tree_types = struct
         | _ -> (realpath' (butlast ns1) ns2))
       | _ -> (realpath' (ns1@[n]) ns2)))
   let realpath ns = realpath' [] ns    
+  *)
 
   type inode_ref = Inode_ref of int
   let dest_inode_ref s0 (Inode_ref i) = i

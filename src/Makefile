@@ -32,7 +32,7 @@ HTMLTARGET=-pre $(MLS) "~~~{.ocaml}" \
 IS=local_resources
 
 ################################################################################
-all: srcs docs fs_spec.native dir_heap.native fs_spec_extras.native dir_tree.native unix_impl.native
+all: srcs docs fs_spec.native dir_heap.native fs_spec_extras.native dir_tree.native unix_impl.native idir.native
 
 # phony 
 srcs: $(SRC)/fs_prelude.ml $(SRC)/fs_prelude.toplevel.ml \
@@ -45,12 +45,6 @@ srcs: $(SRC)/fs_prelude.ml $(SRC)/fs_prelude.toplevel.ml \
 # phony 
 docs: $(DOC)/fs_spec.html $(DOC)/dir_heap.html $(DOC)/dir_tree.html $(DOC)/unix_impl.html
 
-# check that the spec is wellformed ocaml
-fs_spec.native: fs_spec.ml
-	ocamlbuild -libs unix,bigarray fs_spec.native
-
-fs_spec_extras.native: fs_spec_extras.ml fs_spec.ml fs_prelude.ml
-	ocamlbuild -libs unix,bigarray,str -pkg sha -Is $(IS) fs_spec_extras.native
 
 dir_heap.native: dir_heap.ml fs_spec.ml fs_prelude.ml
 	ocamlbuild -libs unix,bigarray dir_heap.native
@@ -58,9 +52,18 @@ dir_heap.native: dir_heap.ml fs_spec.ml fs_prelude.ml
 dir_tree.native: dir_tree.ml fs_spec.ml fs_prelude.ml
 	ocamlbuild -libs unix,bigarray dir_tree.native
 
+# check that the spec is wellformed ocaml
+fs_spec.native: fs_spec.ml
+	ocamlbuild -libs unix,bigarray fs_spec.native
+
+fs_spec_extras.native: fs_spec_extras.ml fs_spec.ml fs_prelude.ml
+	ocamlbuild -libs unix,bigarray,str -pkg sha -Is $(IS) fs_spec_extras.native
+
+idir.native: idir.ml
+	ocamlbuild -libs unix,bigarray,str $@
+
 unix_impl.native: unix_impl.ml fs_spec.ml fs_prelude.ml
 	ocamlbuild -libs unix,bigarray $@
-
 
 fs_spec.hol.tmp: fs_spec.ml FORCE
 	chmod u+w $@

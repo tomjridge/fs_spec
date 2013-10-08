@@ -38,6 +38,7 @@ module Dir_tree_types = struct
   let dest_dir_ref s0 _ = 999
 
   (* doesn't take into account actual state - only valid for actually existing dirs *)
+  (* in fact we don't need this - the only way to get a dir ref is to use functions which effectively give a realpath
   let rec realpath' ns1 ns2 = (
     match ns2 with 
     | [] -> ns1
@@ -50,6 +51,7 @@ module Dir_tree_types = struct
         | _ -> (realpath' (butlast ns1) ns2))
       | _ -> (realpath' (ns1@[n]) ns2)))
   let realpath ns = realpath' [] ns    
+  *)
 
   type inode_ref = Inode_ref of int
   let dest_inode_ref s0 (Inode_ref i) = i
@@ -175,7 +177,7 @@ module Dir_tree_types = struct
 
   let ops1 = {
     get_init_state1=(fun () -> state0);
-    get_parent1=(fun _ -> fun d0_ref -> if d0_ref = [] then None else Some(butlast d0_ref,last d0_ref));
+    get_parent1=(fun _x_ -> fun d0_ref -> if d0_ref = [] then None else Some(butlast d0_ref,last d0_ref));
     get_root1=(fun s0 -> Some[]); (* []  is the dir ref for the root dir *)
     dest_dir_ref1=dest_dir_ref;
     dest_inode_ref1=dest_inode_ref;
@@ -192,7 +194,7 @@ module Dir_tree_types = struct
     rmdir1=(rmdir);
     touch1=(touch);
     write1=(write);
-    set_symlink1=(fun _ -> fun _ -> fun f -> failwith "set_symlink");
+    set_symlink1=(fun _x_ -> fun _x_ -> fun f -> failwith "set_symlink")
   }
 
 end

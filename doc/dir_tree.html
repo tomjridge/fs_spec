@@ -66,18 +66,20 @@ code > span.er { color: #ff0000; font-weight: bold; }
   <span class="kw">let</span> dest_dir_ref s0 _ = 999
 
   <span class="co">(* doesn&#39;t take into account actual state - only valid for actually existing dirs *)</span>
-  <span class="kw">let</span> <span class="kw">rec</span> realpath&#39; ns1 ns2 = (
-    <span class="kw">match</span> ns2 <span class="kw">with</span> 
-    | [] -&gt; ns1
-    | n::ns2 -&gt; (<span class="kw">match</span> n <span class="kw">with</span>
-      | <span class="st">&quot;&quot;</span> -&gt; (realpath&#39; ns1 ns2)
-      | <span class="st">&quot;.&quot;</span> -&gt; (realpath&#39; ns1 ns2)
-      | <span class="st">&quot;..&quot;</span> -&gt; (
-        <span class="kw">match</span> ns1 <span class="kw">with</span>
-        | [] -&gt; (realpath&#39; ns1 ns2)
-        | _ -&gt; (realpath&#39; (butlast ns1) ns2))
-      | _ -&gt; (realpath&#39; (ns1@[n]) ns2)))
-  <span class="kw">let</span> realpath ns = realpath&#39; [] ns    
+  <span class="co">(* in fact we don&#39;t need this - the only way to get a dir ref is to use functions which effectively give a realpath</span>
+<span class="co">  let rec realpath&#39; ns1 ns2 = (</span>
+<span class="co">    match ns2 with </span>
+<span class="co">    | [] -&gt; ns1</span>
+<span class="co">    | n::ns2 -&gt; (match n with</span>
+<span class="co">      | &quot;&quot; -&gt; (realpath&#39; ns1 ns2)</span>
+<span class="co">      | &quot;.&quot; -&gt; (realpath&#39; ns1 ns2)</span>
+<span class="co">      | &quot;..&quot; -&gt; (</span>
+<span class="co">        match ns1 with</span>
+<span class="co">        | [] -&gt; (realpath&#39; ns1 ns2)</span>
+<span class="co">        | _ -&gt; (realpath&#39; (butlast ns1) ns2))</span>
+<span class="co">      | _ -&gt; (realpath&#39; (ns1@[n]) ns2)))</span>
+<span class="co">  let realpath ns = realpath&#39; [] ns    </span>
+<span class="co">  *)</span>
 
   <span class="kw">type</span> inode_ref = <span class="dt">Inode_ref</span> <span class="kw">of</span> <span class="dt">int</span>
   <span class="kw">let</span> dest_inode_ref s0 (<span class="dt">Inode_ref</span> i) = i
@@ -203,7 +205,7 @@ code > span.er { color: #ff0000; font-weight: bold; }
 
   <span class="kw">let</span> ops1 = {
     get_init_state1=(<span class="kw">fun</span> () -&gt; state0);
-    get_parent1=(<span class="kw">fun</span> _ -&gt; <span class="kw">fun</span> d0_ref -&gt; <span class="kw">if</span> d0_ref = [] <span class="kw">then</span> <span class="dt">None</span> <span class="kw">else</span> <span class="dt">Some</span>(butlast d0_ref,last d0_ref));
+    get_parent1=(<span class="kw">fun</span> _x_ -&gt; <span class="kw">fun</span> d0_ref -&gt; <span class="kw">if</span> d0_ref = [] <span class="kw">then</span> <span class="dt">None</span> <span class="kw">else</span> <span class="dt">Some</span>(butlast d0_ref,last d0_ref));
     get_root1=(<span class="kw">fun</span> s0 -&gt; <span class="dt">Some[]</span>); <span class="co">(* []  is the dir ref for the root dir *)</span>
     dest_dir_ref1=dest_dir_ref;
     dest_inode_ref1=dest_inode_ref;
@@ -220,7 +222,7 @@ code > span.er { color: #ff0000; font-weight: bold; }
     rmdir1=(rmdir);
     touch1=(touch);
     write1=(write);
-    set_symlink1=(<span class="kw">fun</span> _ -&gt; <span class="kw">fun</span> _ -&gt; <span class="kw">fun</span> f -&gt; failwith <span class="st">&quot;set_symlink&quot;</span>);
+    set_symlink1=(<span class="kw">fun</span> _x_ -&gt; <span class="kw">fun</span> _x_ -&gt; <span class="kw">fun</span> f -&gt; failwith <span class="st">&quot;set_symlink&quot;</span>)
   }
 
 <span class="kw">end</span>

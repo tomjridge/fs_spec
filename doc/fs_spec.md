@@ -280,10 +280,12 @@ module Fs_types1 = struct
   (* dir handles *)
   type ty_dh = DH of num
 
-  (* FIXME check this in linux kernel docs *)
+  (* FIXME check this in linux kernel docs; also, surely once it is closed we can just remove it, so we don't need this flag? *)
   type fd_open_closed_state = FD_OPEN | FD_CLOSED
 
   type dh_open_closed_state = DH_OPEN | DH_CLOSED
+
+
 
   type ('inode_ref) fd_state = {
     open_or_closed: fd_open_closed_state;

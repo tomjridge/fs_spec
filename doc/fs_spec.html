@@ -317,10 +317,12 @@ open Fs_spec_everything;;</code></pre>
   <span class="co">(* dir handles *)</span>
   <span class="kw">type</span> ty_dh = <span class="dt">DH</span> <span class="kw">of</span> num
 
-  <span class="co">(* FIXME check this in linux kernel docs *)</span>
+  <span class="co">(* FIXME check this in linux kernel docs; also, surely once it is closed we can just remove it, so we don&#39;t need this flag? *)</span>
   <span class="kw">type</span> fd_open_closed_state = <span class="dt">FD_OPEN</span> | <span class="dt">FD_CLOSED</span>
 
   <span class="kw">type</span> dh_open_closed_state = <span class="dt">DH_OPEN</span> | <span class="dt">DH_CLOSED</span>
+
+
 
   <span class="kw">type</span> (&#39;inode_ref) fd_state = {
     open_or_closed: fd_open_closed_state;
