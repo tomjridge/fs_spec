@@ -346,13 +346,13 @@ code > span.er { color: #ff0000; font-weight: bold; }
 <pre class="sourceCode ocaml"><code class="sourceCode ocaml">
   <span class="kw">let</span> link_file ops s0 i1_ref d0_ref name = (
     <span class="kw">let</span> s0 = internal_link_file ops s0 i1_ref d0_ref name <span class="kw">in</span>
-    return s0)
+    return_state s0)
   <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; inode_ref&#39; -&gt; dir_ref&#39; -&gt; name -&gt; ty_return&#39;) = link_file</code></pre>
 <pre class="sourceCode ocaml"><code class="sourceCode ocaml">
   <span class="co">(* FIXME may want to set parent to none if unlinking a dir *)</span>
   <span class="kw">let</span> unlink ops s0 d0_ref name = (
     <span class="kw">let</span> s0 = internal_unlink ops s0 d0_ref name <span class="kw">in</span>
-    return s0)
+    return_state s0)
   <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; dir_ref&#39; -&gt; name -&gt; ty_return&#39;) = unlink</code></pre>
 <pre class="sourceCode ocaml"><code class="sourceCode ocaml">
   <span class="co">(* FIXME assumes name doesn&#39;t exist *)</span>
@@ -361,7 +361,7 @@ code > span.er { color: #ff0000; font-weight: bold; }
     <span class="kw">let</span> (s0,(d1_ref,d1)) = ops.new_dir s0 d0_ref name <span class="kw">in</span>
     <span class="co">(* link d1 into d0 *)</span>
     <span class="kw">let</span> s0 = internal_link_dir ops s0 d0_ref d1_ref name <span class="kw">in</span> <span class="co">(* FIXME no d1, so d1_ref must already be present after new_dir *)</span>
-    return s0)
+    return_state s0)
   <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; dir_ref&#39; -&gt; name -&gt; ty_return&#39;) = mkdir</code></pre>
 <pre class="sourceCode ocaml"><code class="sourceCode ocaml">
   <span class="co">(* FIXME shouldn&#39;t this allow the name to be changed? similarly mvdir *)</span>
@@ -373,7 +373,7 @@ code > span.er { color: #ff0000; font-weight: bold; }
     <span class="kw">let</span> i0_ref = dest_inode_ref_entry entry <span class="kw">in</span>
     <span class="kw">let</span> s0 = internal_link_file ops s0 i0_ref d1_ref name1 <span class="kw">in</span>
     <span class="kw">let</span> s0 = internal_unlink ops s0 d0_ref name0 <span class="kw">in</span> 
-    return s0)
+    return_state s0)
   <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; dir_ref&#39; -&gt; name -&gt; dir_ref&#39; -&gt; name -&gt; ty_return&#39;) = mv
 </code></pre>
 <pre class="sourceCode ocaml"><code class="sourceCode ocaml">
@@ -386,7 +386,7 @@ code > span.er { color: #ff0000; font-weight: bold; }
     <span class="kw">let</span> d2_ref = dest_dir_ref_entry entry <span class="kw">in</span>
     <span class="kw">let</span> s0 = internal_link_dir ops s0 d1_ref d2_ref name1 <span class="kw">in</span>
     <span class="kw">let</span> s0 = internal_unlink ops s0 d0_ref name0 <span class="kw">in</span> 
-    return s0)
+    return_state s0)
   <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; dir_ref&#39; -&gt; name -&gt; dir_ref&#39; -&gt; name -&gt; ty_return&#39;) = mvdir
 </code></pre>
 <pre class="sourceCode ocaml"><code class="sourceCode ocaml">
@@ -432,7 +432,7 @@ code > span.er { color: #ff0000; font-weight: bold; }
   <span class="kw">let</span> touch ops s0 d0_ref name = (
     <span class="kw">let</span> (s0,(i0_ref,i0)) = ops.new_inode s0 <span class="kw">in</span> 
     <span class="kw">let</span> s0 = internal_link_file ops s0 i0_ref d0_ref name <span class="kw">in</span> <span class="co">(* i0 must be in s0 already *)</span>
-    return s0)
+    return_state s0)
   <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; dir_ref&#39; -&gt; name -&gt; ty_return&#39;) = touch</code></pre>
 <pre class="sourceCode ocaml"><code class="sourceCode ocaml">
   <span class="co">(* FIXME obviously we need to support writing at points in the file etc *)</span>
@@ -440,14 +440,14 @@ code > span.er { color: #ff0000; font-weight: bold; }
     <span class="kw">let</span> <span class="dt">Some</span>(i0) = ops.lookup_inode s0 i0_ref <span class="kw">in</span>
     <span class="kw">let</span> i0 = ops.set_contents i0 c <span class="kw">in</span>
     <span class="kw">let</span> s0 = ops.update_inds_some s0 (i0_ref,i0) <span class="kw">in</span>
-    return s0)
+    return_state s0)
   <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; inode_ref&#39; -&gt; bytes -&gt; ty_return&#39;) = write</code></pre>
 <pre class="sourceCode ocaml"><code class="sourceCode ocaml">
   <span class="kw">let</span> set_symlink ops s0 i0_ref f = (
     <span class="kw">let</span> <span class="dt">Some</span>(i0) = ops.lookup_inode s0 i0_ref <span class="kw">in</span>
     <span class="kw">let</span> i0 = ops.set_symlink i0 f <span class="kw">in</span>
     <span class="kw">let</span> s0 = ops.update_inds_some s0 (i0_ref,i0) <span class="kw">in</span>
-    return s0)
+    return_state s0)
   <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; inode_ref&#39; -&gt; <span class="dt">bool</span> -&gt; ty_return&#39;) = set_symlink</code></pre>
 <pre class="sourceCode ocaml"><code class="sourceCode ocaml">
 end

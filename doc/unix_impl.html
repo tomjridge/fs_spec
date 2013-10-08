@@ -361,7 +361,7 @@ code > span.er { color: #ff0000; font-weight: bold; }
 <span class="co">     later levels probably *)</span>
 
   <span class="kw">let</span> do_try&#39; f x = <span class="kw">try</span> (f x) <span class="kw">with</span> e -&gt; (print_endline <span class="st">&quot;unix_impl: this should not happen&quot;</span>; raise e)
-  <span class="kw">let</span> do_try f x s0 = <span class="kw">try</span> (f x); return s0 <span class="kw">with</span> e -&gt; (print_endline <span class="st">&quot;unix_impl: this should not happen&quot;</span>; raise e)
+  <span class="kw">let</span> do_try f x s0 = <span class="kw">try</span> (f x); return_state s0 <span class="kw">with</span> e -&gt; (print_endline <span class="st">&quot;unix_impl: this should not happen&quot;</span>; raise e)
 
   <span class="kw">let</span> dest_ref s0 d0_ref = (    
     <span class="kw">let</span> f () = (

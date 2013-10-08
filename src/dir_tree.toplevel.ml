@@ -59,8 +59,8 @@ module Dir_tree_types = struct
   type contents = string
   type contents_heap = (inode_ref,contents) fmap
   (* root dir has name ""; root must be a dir *)
-  type entry = Dir of (name,entry) fmap | File of inode_ref
-  type fs = { es1:entry; cs1: contents_heap }
+  type entrya = Dir of (name,entrya) fmap | File of inode_ref
+  type fs = { es1:entrya; cs1: contents_heap }
 
   let new_inode_ref fs = (
     let xs = fmap_dom fs.cs1 in
@@ -68,13 +68,13 @@ module Dir_tree_types = struct
     Inode_ref(1+(List.fold_left (fun acc -> fun i -> max acc i) 0 xs)))
 
   (* framestack *)
-  type entries2 = Dir2 of (name,entry) fmap * name 
+  type entries2 = Dir2 of (name,entrya) fmap * name 
 
   let frame_resolve1 (e,frms) n = (
     match e with 
     | File _ -> (failwith "frame_resolve1'")
     | Dir m -> (
-      let Some(e) = fmap_lookup m n in
+      let e = dest_Some(fmap_lookup m n) in (* FIXME expect to find the entry *)
       (e,Dir2(m,n)::frms)))
 
   let frame_resolve e ns = (
@@ -94,7 +94,7 @@ module Dir_tree_types = struct
     | File _ -> (failwith "link_file: impossible") (* dir_ref resolved to file *)
     | Dir m -> (
       let m' = fmap_update m (name,File i0_ref) in
-      return {s0 with es1=(frame_assemble (Dir m',frms))} ))
+      return_state {s0 with es1=(frame_assemble (Dir m',frms))} ))
 
   let unlink s0 d0_ref name = (
     let (e,frms) = frame_resolve s0.es1 d0_ref in
@@ -102,7 +102,7 @@ module Dir_tree_types = struct
     | File _ -> (failwith "link_file: impossible") (* dir_ref resolved to file *)
     | Dir m -> (
       let m' = fmap_remove m name in
-      return {s0 with es1=(frame_assemble (Dir m',frms))} ))
+      return_state {s0 with es1=(frame_assemble (Dir m',frms))} ))
 
   let link_dir s0 d0_ref name d = (
     let (e,frms) = frame_resolve s0.es1 d0_ref in
@@ -110,7 +110,7 @@ module Dir_tree_types = struct
     | File _ -> (failwith "link_file: impossible") (* dir_ref resolved to file *)
     | Dir m -> (
       let m' = fmap_update m (name,d) in
-      return {s0 with es1=(frame_assemble (Dir m',frms))} ))
+      return_state {s0 with es1=(frame_assemble (Dir m',frms))} ))
 
   let mkdir s0 d0_ref name = (link_dir s0 d0_ref name (Dir[]))
 
@@ -120,7 +120,7 @@ module Dir_tree_types = struct
     | File i0_ref -> (
       let s0 = (unlink s0 d0_ref name0).state2 in
       let s0 = (link_file s0 i0_ref d1_ref name1).state2 in
-      return s0)
+      return_state s0)
     | _ -> (failwith "mv"))
 
   let mvdir s0 d0_ref name0 d1_ref name1 = (
@@ -169,7 +169,7 @@ module Dir_tree_types = struct
       let s0 = {s0 with cs1=(fmap_update s0.cs1 (i0_ref,""))} in
       link_file s0 i0_ref d0_ref name))
 
-  let write s0 i0_ref c = (return {s0 with cs1=(fmap_update s0.cs1 (i0_ref,MyDynArray.to_string c))})
+  let write s0 i0_ref c = (return_state {s0 with cs1=(fmap_update s0.cs1 (i0_ref,MyDynArray.to_string c))})
 
   let state0 = {es1=Dir[]; cs1=fmap_empty}
 

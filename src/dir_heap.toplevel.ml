@@ -327,14 +327,14 @@ module Fs_ops1 = struct
 
   let link_file ops s0 i1_ref d0_ref name = (
     let s0 = internal_link_file ops s0 i1_ref d0_ref name in
-    return s0)
+    return_state s0)
   let (_:ty_ops' -> ty_impl' -> inode_ref' -> dir_ref' -> name -> ty_return') = link_file
 
 
   (* FIXME may want to set parent to none if unlinking a dir *)
   let unlink ops s0 d0_ref name = (
     let s0 = internal_unlink ops s0 d0_ref name in
-    return s0)
+    return_state s0)
   let (_:ty_ops' -> ty_impl' -> dir_ref' -> name -> ty_return') = unlink
 
 
@@ -344,7 +344,7 @@ module Fs_ops1 = struct
     let (s0,(d1_ref,d1)) = ops.new_dir s0 d0_ref name in
     (* link d1 into d0 *)
     let s0 = internal_link_dir ops s0 d0_ref d1_ref name in (* FIXME no d1, so d1_ref must already be present after new_dir *)
-    return s0)
+    return_state s0)
   let (_:ty_ops' -> ty_impl' -> dir_ref' -> name -> ty_return') = mkdir
 
 
@@ -357,7 +357,7 @@ module Fs_ops1 = struct
     let i0_ref = dest_inode_ref_entry entry in
     let s0 = internal_link_file ops s0 i0_ref d1_ref name1 in
     let s0 = internal_unlink ops s0 d0_ref name0 in 
-    return s0)
+    return_state s0)
   let (_:ty_ops' -> ty_impl' -> dir_ref' -> name -> dir_ref' -> name -> ty_return') = mv
 
 
@@ -371,7 +371,7 @@ module Fs_ops1 = struct
     let d2_ref = dest_dir_ref_entry entry in
     let s0 = internal_link_dir ops s0 d1_ref d2_ref name1 in
     let s0 = internal_unlink ops s0 d0_ref name0 in 
-    return s0)
+    return_state s0)
   let (_:ty_ops' -> ty_impl' -> dir_ref' -> name -> dir_ref' -> name -> ty_return') = mvdir
 
 
@@ -422,7 +422,7 @@ module Fs_ops1 = struct
   let touch ops s0 d0_ref name = (
     let (s0,(i0_ref,i0)) = ops.new_inode s0 in 
     let s0 = internal_link_file ops s0 i0_ref d0_ref name in (* i0 must be in s0 already *)
-    return s0)
+    return_state s0)
   let (_:ty_ops' -> ty_impl' -> dir_ref' -> name -> ty_return') = touch
 
 
@@ -431,7 +431,7 @@ module Fs_ops1 = struct
     let Some(i0) = ops.lookup_inode s0 i0_ref in
     let i0 = ops.set_contents i0 c in
     let s0 = ops.update_inds_some s0 (i0_ref,i0) in
-    return s0)
+    return_state s0)
   let (_:ty_ops' -> ty_impl' -> inode_ref' -> bytes -> ty_return') = write
 
 
@@ -439,7 +439,7 @@ module Fs_ops1 = struct
     let Some(i0) = ops.lookup_inode s0 i0_ref in
     let i0 = ops.set_symlink i0 f in
     let s0 = ops.update_inds_some s0 (i0_ref,i0) in
-    return s0)
+    return_state s0)
   let (_:ty_ops' -> ty_impl' -> inode_ref' -> bool -> ty_return') = set_symlink
 
 

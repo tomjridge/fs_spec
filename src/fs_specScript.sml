@@ -84,7 +84,7 @@ val tmp = diminish_srw_ss ["list EQ","REDUCE","ARITH_RWTS"];
 (* I find ASCII easier to read than (single width) unicode *)
 val _ = set_trace "Unicode" 0;
 
-val _ = new_theory "fs_spec";
+(* val _ = new_theory "fs_spec"; *)
 
 (* * library stuff *)
 
@@ -358,7 +358,7 @@ ty_return2 = <|
   |>
 `;
 (* FIXME want to ensure that this return has a different name to the return from Fs_ops2 *)
-val return_def = Define `
+val return_state_def = Define `
 return_state s = <| state2 := s; ret2 := None1 |>
 `;
 
@@ -1229,7 +1229,7 @@ fs_trans ops s0 lbl = (
 
 (* * end *)
 
-val _ = export_theory();
+(* val _ = export_theory(); *)
 
 (*
 

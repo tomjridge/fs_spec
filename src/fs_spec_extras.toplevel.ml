@@ -22,6 +22,11 @@ module Extra_ops = struct
     if (ops.get_symlink i0) then S_LNK else S_REG)
 *)
 
+  let string_of_names ns = (String.concat "/" ns)
+
+  let string_of_res_name n = (
+    let nl = name_list_of_res_name n in
+    string_of_names nl.ns2)
 
   let kind_of_inode_ref ops s0 i0_ref = (
       if (ops.get_symlink1 s0 i0_ref) then S_LNK else S_REG)

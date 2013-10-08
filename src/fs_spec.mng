@@ -1125,14 +1125,6 @@ module Fs_types1 = struct
     | None2 (_,_,rp) -> rp.nl3
     | Err2 (_,nl) -> nl)
 
-(* FIXME not used? 
-  let string_of_names ns = (String.concat "/" ns)
-
-  let string_of_res_name n = (
-    let nl = name_list_of_res_name n in
-    string_of_names nl.ns2)
-*)
-
   type ('dir_ref,'inode_ref) ty_fs_label = 
       FS_LINK of (('dir_ref,'inode_ref) res_name * ('dir_ref,'inode_ref) res_name)
     | FS_MKDIR of (('dir_ref,'inode_ref) res_name * file_perm)
@@ -1157,7 +1149,7 @@ module Fs_types1 = struct
     state2: 'impl;
     ret2: ret_value;
   } 
-  (* FIXME not used?  let return_state s = { state2=s; ret2=None1 } *)
+  let return_state s = { state2=s; ret2=None1 }
 
 
   type ('dir_ref,'inode_ref,'impl) ty_ops1 = {
@@ -1308,7 +1300,7 @@ module Resolve = struct
   (* get the real path, given a dir_ref *)
   let rec real_path_dir_ref ops s0 d0_ref = (
     match (ops.get_parent1 s0 d0_ref) with
-    | None -> [""]
+    | None -> [""]  (* FIXME not sure if we want to do this; perhaps introduce yet another type; this allows us to just append further names, but [""] is not a valid path from the user - ["";""] represents root *)
     | Some(d1_ref,n) -> (real_path_dir_ref ops s0 d1_ref)@[n])
 
   type ('dir_ref,'inode_ref) ty_resolve_relative_ok = 
@@ -1666,7 +1658,7 @@ module Fs_ops2 = struct
       | Err2 (e,_) -> (myraise e)
       | None2 (d1_ref,ndst,rp) -> (
         (let cond1 = ends_with_slash rdst in
-        cond_raise [(cond1,ENOTDIR)]) >>= fun _x_ -> (* tr/3 *)
+        cond_raise [(cond1,ENOTDIR)]) >>= fun _x_ -> (* tr/3 similar to tr/5 *)
         (* do the move; there is no file ns_dst *)
         put_state'' (fun () -> ops.mv1 s0 d0_ref nsrc d1_ref ndst))
       | Fname2 (d1_ref,ndst,i1_ref,rp) -> (
@@ -2321,6 +2313,11 @@ module Extra_ops = struct
     if (ops.get_symlink i0) then S_LNK else S_REG)
 *)
 
+  let string_of_names ns = (String.concat "/" ns)
+
+  let string_of_res_name n = (
+    let nl = name_list_of_res_name n in
+    string_of_names nl.ns2)
 
   let kind_of_inode_ref ops s0 i0_ref = (
       if (ops.get_symlink1 s0 i0_ref) then S_LNK else S_REG)

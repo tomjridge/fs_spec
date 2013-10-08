@@ -328,7 +328,7 @@ module Unix_impl_everything = struct
      later levels probably *)
 
   let do_try' f x = try (f x) with e -> (print_endline "unix_impl: this should not happen"; raise e)
-  let do_try f x s0 = try (f x); return s0 with e -> (print_endline "unix_impl: this should not happen"; raise e)
+  let do_try f x s0 = try (f x); return_state s0 with e -> (print_endline "unix_impl: this should not happen"; raise e)
 
   let dest_ref s0 d0_ref = (    
     let f () = (

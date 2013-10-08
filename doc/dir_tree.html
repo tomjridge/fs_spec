@@ -87,8 +87,8 @@ code > span.er { color: #ff0000; font-weight: bold; }
   <span class="kw">type</span> contents = <span class="dt">string</span>
   <span class="kw">type</span> contents_heap = (inode_ref,contents) fmap
   <span class="co">(* root dir has name &quot;&quot;; root must be a dir *)</span>
-  <span class="kw">type</span> entry = <span class="dt">Dir</span> <span class="kw">of</span> (name,entry) fmap | <span class="dt">File</span> <span class="kw">of</span> inode_ref
-  <span class="kw">type</span> fs = { es1:entry; cs1: contents_heap }
+  <span class="kw">type</span> entrya = <span class="dt">Dir</span> <span class="kw">of</span> (name,entrya) fmap | <span class="dt">File</span> <span class="kw">of</span> inode_ref
+  <span class="kw">type</span> fs = { es1:entrya; cs1: contents_heap }
 
   <span class="kw">let</span> new_inode_ref fs = (
     <span class="kw">let</span> xs = fmap_dom fs.cs1 <span class="kw">in</span>
@@ -96,13 +96,13 @@ code > span.er { color: #ff0000; font-weight: bold; }
     <span class="dt">Inode_ref</span>(1+(List<span class="kw">.</span>fold_left (<span class="kw">fun</span> acc -&gt; <span class="kw">fun</span> i -&gt; max acc i) 0 xs)))
 
   <span class="co">(* framestack *)</span>
-  <span class="kw">type</span> entries2 = <span class="dt">Dir2</span> <span class="kw">of</span> (name,entry) fmap * name 
+  <span class="kw">type</span> entries2 = <span class="dt">Dir2</span> <span class="kw">of</span> (name,entrya) fmap * name 
 
   <span class="kw">let</span> frame_resolve1 (e,frms) n = (
     <span class="kw">match</span> e <span class="kw">with</span> 
     | <span class="dt">File</span> _ -&gt; (failwith <span class="st">&quot;frame_resolve1&#39;&quot;</span>)
     | <span class="dt">Dir</span> m -&gt; (
-      <span class="kw">let</span> <span class="dt">Some</span>(e) = fmap_lookup m n <span class="kw">in</span>
+      <span class="kw">let</span> e = dest_Some(fmap_lookup m n) <span class="kw">in</span> <span class="co">(* FIXME expect to find the entry *)</span>
       (e,<span class="dt">Dir2</span>(m,n)::frms)))
 
   <span class="kw">let</span> frame_resolve e ns = (
@@ -122,7 +122,7 @@ code > span.er { color: #ff0000; font-weight: bold; }
     | <span class="dt">File</span> _ -&gt; (failwith <span class="st">&quot;link_file: impossible&quot;</span>) <span class="co">(* dir_ref resolved to file *)</span>
     | <span class="dt">Dir</span> m -&gt; (
       <span class="kw">let</span> m&#39; = fmap_update m (name,<span class="dt">File</span> i0_ref) <span class="kw">in</span>
-      return {s0 <span class="kw">with</span> es1=(frame_assemble (<span class="dt">Dir</span> m&#39;,frms))} ))
+      return_state {s0 <span class="kw">with</span> es1=(frame_assemble (<span class="dt">Dir</span> m&#39;,frms))} ))
 
   <span class="kw">let</span> unlink s0 d0_ref name = (
     <span class="kw">let</span> (e,frms) = frame_resolve s0.es1 d0_ref <span class="kw">in</span>
@@ -130,7 +130,7 @@ code > span.er { color: #ff0000; font-weight: bold; }
     | <span class="dt">File</span> _ -&gt; (failwith <span class="st">&quot;link_file: impossible&quot;</span>) <span class="co">(* dir_ref resolved to file *)</span>
     | <span class="dt">Dir</span> m -&gt; (
       <span class="kw">let</span> m&#39; = fmap_remove m name <span class="kw">in</span>
-      return {s0 <span class="kw">with</span> es1=(frame_assemble (<span class="dt">Dir</span> m&#39;,frms))} ))
+      return_state {s0 <span class="kw">with</span> es1=(frame_assemble (<span class="dt">Dir</span> m&#39;,frms))} ))
 
   <span class="kw">let</span> link_dir s0 d0_ref name d = (
     <span class="kw">let</span> (e,frms) = frame_resolve s0.es1 d0_ref <span class="kw">in</span>
@@ -138,7 +138,7 @@ code > span.er { color: #ff0000; font-weight: bold; }
     | <span class="dt">File</span> _ -&gt; (failwith <span class="st">&quot;link_file: impossible&quot;</span>) <span class="co">(* dir_ref resolved to file *)</span>
     | <span class="dt">Dir</span> m -&gt; (
       <span class="kw">let</span> m&#39; = fmap_update m (name,d) <span class="kw">in</span>
-      return {s0 <span class="kw">with</span> es1=(frame_assemble (<span class="dt">Dir</span> m&#39;,frms))} ))
+      return_state {s0 <span class="kw">with</span> es1=(frame_assemble (<span class="dt">Dir</span> m&#39;,frms))} ))
 
   <span class="kw">let</span> mkdir s0 d0_ref name = (link_dir s0 d0_ref name (<span class="dt">Dir[]</span>))
 
@@ -148,7 +148,7 @@ code > span.er { color: #ff0000; font-weight: bold; }
     | <span class="dt">File</span> i0_ref -&gt; (
       <span class="kw">let</span> s0 = (unlink s0 d0_ref name0).state2 <span class="kw">in</span>
       <span class="kw">let</span> s0 = (link_file s0 i0_ref d1_ref name1).state2 <span class="kw">in</span>
-      return s0)
+      return_state s0)
     | _ -&gt; (failwith <span class="st">&quot;mv&quot;</span>))
 
   <span class="kw">let</span> mvdir s0 d0_ref name0 d1_ref name1 = (
@@ -197,7 +197,7 @@ code > span.er { color: #ff0000; font-weight: bold; }
       <span class="kw">let</span> s0 = {s0 <span class="kw">with</span> cs1=(fmap_update s0.cs1 (i0_ref,<span class="st">&quot;&quot;</span>))} <span class="kw">in</span>
       link_file s0 i0_ref d0_ref name))
 
-  <span class="kw">let</span> write s0 i0_ref c = (return {s0 <span class="kw">with</span> cs1=(fmap_update s0.cs1 (i0_ref,MyDynArray<span class="kw">.</span>to_string c))})
+  <span class="kw">let</span> write s0 i0_ref c = (return_state {s0 <span class="kw">with</span> cs1=(fmap_update s0.cs1 (i0_ref,MyDynArray<span class="kw">.</span>to_string c))})
 
   <span class="kw">let</span> state0 = {es1=Dir[]; cs1=fmap_empty}
 
