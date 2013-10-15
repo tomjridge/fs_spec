@@ -1,7 +1,27 @@
-(* this is intended to be loaded into HOL after fs_specScript.sml *)
+(*
+Interactive use:
 
-(* val _ = new_theory "dir_tree"; *)
+val _ = app load ["numLib","finite_mapTheory", "stringTheory", "unwindLib","prim_recTheory","sumTheory"]; (* unwindLib for tactics; prim_rec for measure *)
 
+(* I find ASCII easier to read than (single width) unicode *)
+val _ = set_trace "Unicode" 0;
+
+val _ = app load ["fs_specTheory"];
+
+*)
+
+
+open HolKernel boolLib Parse bossLib numLib finite_mapTheory stringTheory unwindLib prim_recTheory sumTheory proofManagerLib
+
+local open fs_specTheory in end;
+
+val _ = new_theory "dir_tree";
+
+
+(* we are using association lists rather than finite maps because HOL
+wouldn't accept the entrya type definition which uses nested finite
+maps; we should probably use finite maps if we possible; FIXME force
+HOL to accept nested finite maps in defn of entrya type *)
 
 val fmap_dom_def = Define`
 fmap_dom fs' = MAP FST fs'
@@ -13,17 +33,18 @@ fmap_empty = []
 
 (* FIXME need association lists in HOL *)
 val fmap_lookup_def = Define `
-fmap_lookup m n = SOME(SND (HD m))
+fmap_lookup m n = (
+  let xs = FILTER (\ (x,y). x=n) m in
+  if xs=[] then NONE else SOME(SND (HD xs)))
 `;
 
-(* FIXME *)
 val fmap_update_def = Define `
-fmap_update m n = m
+fmap_update m n = n::m
 `;
 
-(* FIXME *)
 val fmap_remove_def = Define `
-fmap_remove m n = m
+fmap_remove m n = (
+  FILTER (\ (x,y). x <> n) m)
 `;
 
 
@@ -56,15 +77,15 @@ dest_dir_ref s0 _ = 999
 val realpath'_def = Define `
 realpath' ns1 ns2 = (
     case ns2 of 
-      [] -> ns1
-    || n::ns2 -> (case n of
-        "" -> (realpath' ns1 ns2)
-      || "." -> (realpath' ns1 ns2)
-      || ".." -> (
+      [] => ns1
+    | n::ns2 => (case n of
+        "" => (realpath' ns1 ns2)
+      | "." => (realpath' ns1 ns2)
+      | ".." => (
         case ns1 of
-          [] -> (realpath' ns1 ns2)
-        || _ -> (realpath' (butlast ns1) ns2))
-      || _ -> (realpath' (ns1++[n]) ns2)))
+          [] => (realpath' ns1 ns2)
+        | _ => (realpath' (butlast ns1) ns2))
+      | _ => (realpath' (ns1++[n]) ns2)))
 `;
 val realpath_def = Define `
 realpath ns = realpath' [] ns
@@ -88,7 +109,7 @@ val contents_heap_def = type_abbrev("contents_heap",``:(inode_ref#contents) list
 
 (* FIXME couldn't get fmap constructor to work in nested context below *)
 (* FIXME entry type clashes with previous entry defn *)
-val entry_def = Hol_datatype `
+val entrya_def = Hol_datatype `
 entrya = Dir of (name#entrya) list | File of inode_ref
 `;
 (* FIXME don't use fs as constant, since used later as var? *)
@@ -116,8 +137,8 @@ entries2 = Dir2 of (name#entrya) list # name
 val frame_resolve1_def = Define `
 frame_resolve1 (e,frms) n = (
     case e of 
-      File _ -> (failwith "frame_resolve1'")
-    || Dir m -> (
+      File _ => (failwith "frame_resolve1'")
+    | Dir m => (
       let e = dest_Some(fmap_lookup m n) in (* FIXME expect to find the entry *)
       (e,Dir2(m,n)::frms)))
 `;
@@ -130,7 +151,7 @@ frame_resolve e ns = (
 val frame_assemble_def = Define `
 frame_assemble (e,frms) = (
         let f1 e f = (case f of
-            Dir2(m,n) -> (
+            Dir2(m,n) => (
             let m' = fmap_update m (n,e) in
             Dir m'))
         in
@@ -141,8 +162,8 @@ val link_file_def = Define `
 link_file s0 i0_ref d0_ref name = (
         let (e,frms) = frame_resolve s0.es1 d0_ref in
         case e of
-          File _ -> (failwith "link_file: impossible") (* dir_ref resolved to file *)
-        || Dir m -> (
+          File _ => (failwith "link_file: impossible") (* dir_ref resolved to file *)
+        | Dir m => (
           let m' = fmap_update m (name,File i0_ref) in
           return_state (s0 with <|es1 := (frame_assemble (Dir m',frms))|>) ))
 `;
@@ -151,8 +172,8 @@ val unlink_def = Define `
 unlink s0 d0_ref name = (
         let (e,frms) = frame_resolve s0.es1 d0_ref in
         case e of
-          File _ -> (failwith "link_file: impossible") (* dir_ref resolved to file *)
-        || Dir m -> (
+          File _ => (failwith "link_file: impossible") (* dir_ref resolved to file *)
+        | Dir m => (
           let m' = fmap_remove m name in
           return_state (s0 with <|es1 := (frame_assemble (Dir m',frms))|>) ))
 `;
@@ -161,8 +182,8 @@ val link_dir_def = Define `
 link_dir s0 d0_ref name d = (
         let (e,frms) = frame_resolve s0.es1 d0_ref in
         case e of
-          File _ -> (failwith "link_file: impossible") (* dir_ref resolved to file *)
-        || Dir m -> (
+          File _ => (failwith "link_file: impossible") (* dir_ref resolved to file *)
+        | Dir m => (
           let m' = fmap_update m (name,d) in
           return_state (s0 with <|es1 := (frame_assemble (Dir m',frms))|>) ))
 `;
@@ -175,26 +196,26 @@ val mv_def = Define `
 mv s0 d0_ref name0 d1_ref name1 = (
     let (e,frms) = frame_resolve s0.es1 (d0_ref++[name0]) in
     case e of
-      File i0_ref -> (
+      File i0_ref => (
       let s0 = (unlink s0 d0_ref name0).state2 in
       let s0 = (link_file s0 i0_ref d1_ref name1).state2 in
       return_state s0)
-    || _ -> (failwith "mv"))
+    | _ => (failwith "mv"))
 `;
     
 val mvdir_def = Define `
 mvdir s0 d0_ref name0 d1_ref name1 = (
         let (e,frms) = frame_resolve s0.es1 (d0_ref++[name0]) in
         case e of
-          File i0_ref -> (failwith "mvdir: 1")
-        || Dir m -> (
+          File i0_ref => (failwith "mvdir: 1")
+        | Dir m => (
           let s0 = (unlink s0 d0_ref name0).state2 in
           link_dir s0 d1_ref name1 (Dir m)))
 `;
     
 val read_def = Define `
 read s0 i0_ref = (
-        case fmap_lookup s0.cs1 i0_ref of SOME(c) -> 
+        case fmap_lookup s0.cs1 i0_ref of SOME(c) => 
         <|state2 := s0;ret2 := (Bytes1 ((*MyDynArray.of_string*) c)) |>)
 `;
 
@@ -203,8 +224,8 @@ val readdir_def = Define `
 readdir s0 d0_ref = (
         let (e,frms) = frame_resolve s0.es1 d0_ref in
         case e of
-          File _ -> (failwith "readdir")
-        || Dir m -> (
+          File _ => (failwith "readdir")
+        | Dir m => (
           let names = fmap_dom m in
           let names = names in (* List.sort Pervasives.compare names in  *)
           <|state2 := s0; ret2 := (Names1 names)|>))
@@ -215,13 +236,13 @@ val resolve1_def = Define `
 resolve1 s0 d0_ref name = (
         let (e,frms) = frame_resolve s0.es1 d0_ref in
         case e of
-          File i0_ref -> NONE
-        || Dir m -> (
+          File i0_ref => NONE
+        | Dir m => (
           let e = fmap_lookup m name in
-          case e of   NONE -> NONE || SOME e -> 
+          case e of   NONE => NONE | SOME e => 
           case e of
-            File i0_ref -> (SOME(INR i0_ref))
-          || Dir _ -> (SOME(INL (d0_ref++[name])))))
+            File i0_ref => (SOME(INR i0_ref))
+          | Dir _ => (SOME(INL (d0_ref++[name])))))
 `;
           
     
@@ -237,8 +258,8 @@ val touch_def = Define `
 touch s0 d0_ref name = (
         let (e,frms) = frame_resolve s0.es1 d0_ref in
         case e of
-          File _ -> (failwith "touch")
-        || Dir m -> (
+          File _ => (failwith "touch")
+        | Dir m => (
           let i0_ref = new_inode_ref s0 in
           let s0 = (s0 with <|cs1 := (fmap_update s0.cs1 (i0_ref,""))|>) in
           link_file s0 i0_ref d0_ref name))

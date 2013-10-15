@@ -77,6 +77,11 @@ module Extra_ops = struct
     let (_,Inr(Stats1(s))) = process_label ops s0 (FS_STAT pp) in
     s.Unix.LargeFile.st_ino)
 
+  let dir_ref_of_path ops s0 p = (
+    let pp = process_path_from_root ops s0 p in
+    let (_,Inr(Stats1(s))) = process_label ops s0 (FS_STAT pp) in
+    s.Unix.LargeFile.st_ino)
+
 end
 
 
@@ -233,6 +238,7 @@ module Dump_fs = struct
   let find = Extra_ops.find_path
   let kind = Extra_ops.kind_of_path
   let inode_of_path = Extra_ops.inode_of_path
+  let dir_ref_of_path = Extra_ops.dir_ref_of_path
 
   (* we need to maintain a map of inodes that we have already seen, so we can update them as we go; we maintain a counter c from 1, and insert (inode,c++) into map when meeting new inode *)
   (* note this ordering is sensitive to the order of the paths ps! *)
@@ -272,6 +278,30 @@ module Dump_fs = struct
     let params = { sep="|"; outsep="|"; newline="\n"; dquote="\"" } in
     let s = String.concat "" (List.map (format params None1 rs) rs) in
     s)
+
+  (* plan versions show directory references, and inode references, without fiddling *)
+
+  let plain_records_of_path ops s0 s = (
+    let ps = find ops s0 s in
+    let f1 p = (
+      let k = kind ops s0 p in
+      match k with 
+      | S_REG -> [p;"F";(string_of_int (inode_of_path ops s0 p));(sha1_of_path ops s0 p)]
+      | S_DIR -> [p;"D";(string_of_int (dir_ref_of_path ops s0 p))]
+      | S_LNK -> [p;"L";(MyDynArray.to_string (Extra_ops.read_all ops s0 p))]
+      | _ -> failwith "main")
+    in
+    let ss = List.map f1 ps in
+    ss)
+
+  (* convert to csv data *)
+  let plain_dump_of_path ops s0 p = (
+    let open Mycsv in
+    let rs = plain_records_of_path ops s0 p in
+    let params = { sep="|"; outsep="|"; newline="\n"; dquote="\"" } in
+    let s = String.concat "" (List.map (format params None1 rs) rs) in
+    s)
+
 
 
 (*

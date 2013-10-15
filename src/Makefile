@@ -32,7 +32,7 @@ HTMLTARGET=-pre $(MLS) "~~~{.ocaml}" \
 IS=local_resources
 
 ################################################################################
-all: srcs docs fs_spec.native dir_heap.native fs_spec_extras.native dir_tree.native unix_impl.native idir.native
+all: srcs docs fs_spec.native dir_heap.native fs_spec_extras.native dir_tree.native unix_impl.native idir.native unix_impl_readonly.ml
 
 # phony 
 srcs: $(SRC)/fs_prelude.ml $(SRC)/fs_prelude.toplevel.ml \
@@ -40,6 +40,7 @@ srcs: $(SRC)/fs_prelude.ml $(SRC)/fs_prelude.toplevel.ml \
 	$(SRC)/dir_heap.ml $(SRC)/dir_heap.toplevel.ml \
 	$(SRC)/dir_tree.ml $(SRC)/dir_tree.toplevel.ml \
 	$(SRC)/unix_impl.ml $(SRC)/unix_impl.toplevel.ml \
+	$(SRC)/unix_impl.ml $(SRC)/unix_impl_readonly.toplevel.ml \
 	$(SRC)/fs_spec_extras.ml $(SRC)/fs_spec_extras.toplevel.ml
 
 # phony 
@@ -64,6 +65,10 @@ idir.native: idir.ml
 
 unix_impl.native: unix_impl.ml fs_spec.ml fs_prelude.ml
 	ocamlbuild -libs unix,bigarray $@
+
+unix_impl_readonly.native: unix_impl.ml fs_spec.ml fs_prelude.ml
+	ocamlbuild -libs unix,bigarray $@
+
 
 fs_spec.hol.tmp: fs_spec.ml FORCE
 	chmod u+w $@
@@ -135,6 +140,15 @@ $(SRC)/unix_impl.toplevel.ml: $(SRC)/unix_impl.ml
 	echo " end" >> $@
 	echo ";;" >> $@
 	chmod u-w $@
+
+$(SRC)/unix_impl_readonly.toplevel.ml: $(SRC)/unix_impl_readonly.ml
+	-chmod u+w $@
+	echo "module Unix_impl_readonly = struct " >$@
+	cat $< >>$@
+	echo " end" >> $@
+	echo ";;" >> $@
+	chmod u-w $@
+
 
 $(SRC)/unix_impl.ml: unix_impl.mng
 	-chmod u+w $@

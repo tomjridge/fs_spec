@@ -109,6 +109,7 @@ module Fs_types1 = struct
     | EUNKNOWNERR of int
  
   (* from unix.mli *)
+  (* FIXME extend these to use open flags listed here http://pubs.opengroup.org/onlinepubs/9699919799/ *)
   type open_flag =
       O_RDONLY                    (** Open for reading *)
     | O_WRONLY                    (** Open for writing *)
