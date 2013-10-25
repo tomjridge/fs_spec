@@ -493,6 +493,7 @@ end
 
   <span class="kw">let</span> ops1 = {
     get_init_state1=(<span class="kw">fun</span> () -&gt; state0);
+    get_arch1=(<span class="kw">fun</span> _ -&gt; default_arch);
     get_parent1=(<span class="kw">fun</span> s0 -&gt; <span class="kw">fun</span> d0_ref -&gt; 
       <span class="kw">let</span> d0 = dest_Some(ops.lookup_dir s0 d0_ref) <span class="kw">in</span>
       (d0.parent1)); <span class="co">(* FIXME do we always know this will return something? disconnected dirs? *)</span>

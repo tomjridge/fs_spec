@@ -488,6 +488,7 @@ module Dir_heap_ops = struct
 
   let ops1 = {
     get_init_state1=(fun () -> state0);
+    get_arch1=(fun _ -> default_arch);
     get_parent1=(fun s0 -> fun d0_ref -> 
       let d0 = dest_Some(ops.lookup_dir s0 d0_ref) in
       (d0.parent1)); (* FIXME do we always know this will return something? disconnected dirs? *)

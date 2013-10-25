@@ -1,6 +1,6 @@
-System requirements: ocaml ocamlscript pandoc
+System requirements: ocaml ocamlscript sha pandoc
 
-For ocaml and ocamlscript, easiest to install via opam.
+For ocaml and ocamlscript and sha, easiest to install via opam.
 
 To build doc etc: `cd src && make`
 

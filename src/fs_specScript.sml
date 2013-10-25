@@ -17,10 +17,10 @@ open HolKernel Parse bossLib proofManagerLib boolLib numLib finite_mapTheory str
 (* FIXME change to HOL_Interactive.toggle_quietdec() *)
 fun myquietdec n = PolyML.print_depth n; (* EXPORT poly *)
 
-myquietdec 0;
+(* myquietdec 0; *)
 open pred_setTheory;
 open finite_mapTheory;
-myquietdec 100;
+(* myquietdec 100; *)
 
 (* dangerous *)
 val CHEAT_TAC = fn (asl,w) => ([], fn [] => Thm.mk_thm (asl,w));

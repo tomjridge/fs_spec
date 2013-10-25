@@ -424,6 +424,7 @@ module Unix_impl_everything = struct
 
   let ops1 = {
     get_init_state1=(fun () -> state0);
+    get_arch1=(fun _ -> default_arch);
     get_parent1=(fun _ -> fun d0_ref -> if d0_ref = [] then None else Some(butlast d0_ref,last d0_ref));
     get_root1=(fun s0 -> Some[]); (* []  is the dir ref for the root dir *)
     dest_dir_ref1=dest_dir_ref;

@@ -65,6 +65,28 @@ open Fs_spec_everything;;</code></pre>
 
   <span class="ot">open</span> Prelude
 
+  <span class="co">(* the spec is parameterized by various traits, combined to form an &quot;architecture&quot; *)</span>
+  <span class="kw">type</span> architecture = {
+    abs_path_slash_slash: <span class="dt">bool</span>; <span class="co">(* whether an absolute path can start with a double slash - POSIX has implementation defined *)</span>
+    linux_non_posix: <span class="dt">bool</span>; <span class="co">(* Linux specific behaviour that is not POSIX compliant *)</span>
+  }
+
+  <span class="kw">let</span> linux_arch = {
+    abs_path_slash_slash = <span class="kw">true</span>;
+    linux_non_posix = <span class="kw">true</span>;
+  }
+
+  <span class="co">(* for testing, we don&#39;t want to fail every time we hit a POSIX</span>
+<span class="co">     &quot;implementation defined&quot; feature; the following architecture is</span>
+<span class="co">     POSIX, but with implementation defined features selected so that the</span>
+<span class="co">     behaviour is sensible *)</span>
+  <span class="kw">let</span> posix_test_arch = {
+    abs_path_slash_slash = <span class="kw">true</span>;
+    linux_non_posix = <span class="kw">false</span>;
+  }
+
+  <span class="kw">let</span> default_arch = posix_test_arch
+
   <span class="kw">type</span> num = <span class="dt">int</span> <span class="co">(* FIXME; also fix uses of type int below to be num where appropriate *)</span>
 
   <span class="kw">type</span> bytes = MyDynArray<span class="kw">.</span>t
@@ -229,7 +251,7 @@ open Fs_spec_everything;;</code></pre>
     <span class="dt">Dname2</span> <span class="kw">of</span> (&#39;dir_ref * (&#39;dir_ref) ty_realpath1)
   | <span class="dt">Fname2</span> <span class="kw">of</span> (&#39;dir_ref * name * &#39;inode_ref * (&#39;dir_ref) ty_realpath1)
   | <span class="dt">None2</span> <span class="kw">of</span> (&#39;dir_ref * name * (&#39;dir_ref) ty_realpath1)
-  | <span class="dt">Err2</span> <span class="kw">of</span> (error * ty_name_list)
+  | <span class="dt">Err2</span> <span class="kw">of</span> (error * ty_name_list * &#39;dir_ref)  <span class="co">(* final component is cwd *)</span>
   <span class="co">(* invariant: if Fname2 ns, then not (ns.ends_with_slash2) *)</span>
   <span class="co">(* invariant: if Err2 then ns.ends_with_slash2 *)</span>
   <span class="co">(* FIXME since these are resolved, we may want to include the i0_ref and d0_ref *)</span>
@@ -240,7 +262,7 @@ open Fs_spec_everything;;</code></pre>
     | <span class="dt">Dname2</span> (_,rp) -&gt; rp.nl3
     | <span class="dt">Fname2</span> (_,_,_,rp) -&gt; rp.nl3
     | <span class="dt">None2</span> (_,_,rp) -&gt; rp.nl3
-    | <span class="dt">Err2</span> (_,nl) -&gt; nl)
+    | <span class="dt">Err2</span> (_,nl,_) -&gt; nl)
 
   <span class="kw">type</span> (&#39;dir_ref,&#39;inode_ref) ty_fs_label = 
       <span class="dt">FS_LINK</span> <span class="kw">of</span> ((&#39;dir_ref,&#39;inode_ref) res_name * (&#39;dir_ref,&#39;inode_ref) res_name)
@@ -271,6 +293,7 @@ open Fs_spec_everything;;</code></pre>
 
   <span class="kw">type</span> (&#39;dir_ref,&#39;inode_ref,&#39;impl) ty_ops1 = {
     get_init_state1: <span class="dt">unit</span> -&gt; &#39;impl;
+    get_arch1:&#39;impl -&gt; architecture;
     get_parent1: &#39;impl -&gt; &#39;dir_ref -&gt; (&#39;dir_ref * name) <span class="dt">option</span>; <span class="co">(* if root, parent is none; possibly disconnected dirs can also have no parent *)</span>
     get_root1: &#39;impl -&gt; &#39;dir_ref <span class="dt">option</span>;
     dest_dir_ref1: &#39;impl -&gt; &#39;dir_ref -&gt; <span class="dt">int</span>;
@@ -432,17 +455,17 @@ open Fs_spec_everything;;</code></pre>
         <span class="kw">let</span> m = ops.resolve11 s0 sofar n <span class="kw">in</span>
         <span class="kw">match</span> m <span class="kw">with</span> 
         | <span class="dt">None</span> -&gt; (
-          <span class="kw">if</span> (ns=[]) || (ns=[<span class="st">&quot;&quot;</span>]) <span class="kw">then</span> <span class="co">(* may end in a slash *)</span>
+          <span class="kw">if</span> (ns=[]) || (ns=[<span class="st">&quot;&quot;</span>]) <span class="kw">then</span> <span class="co">(* may end in a slash; FIXME what about multiple slashes? *)</span>
             <span class="dt">Ok3</span>(<span class="dt">None4</span>(sofar,n))
           <span class="kw">else</span>
-            <span class="dt">Err3</span>(<span class="dt">ENOENT</span>))
+            <span class="dt">Err3</span>(<span class="dt">ENOENT</span>))  <span class="co">(* posix/rename ENOENT:2 *)</span>
         | <span class="dt">Some</span> entry -&gt; (
           <span class="kw">match</span> entry <span class="kw">with</span> 
           | <span class="dt">Inr</span> i0_ref -&gt; (
             <span class="kw">if</span> ns=[] <span class="kw">then</span> <span class="co">(* not allowed to end in slash *)</span>
               <span class="dt">Ok3</span>(<span class="dt">File4</span>(sofar,n,i0_ref)) 
             <span class="kw">else</span>
-              <span class="dt">Err3</span>(<span class="dt">ENOTDIR</span>))
+              <span class="dt">Err3</span>(<span class="dt">ENOTDIR</span>))  <span class="co">(* posix/rename ENOTDIR:1 ENOTDIR:3 ENOTDIR:5 *)</span>
           | <span class="dt">Inl</span> d0_ref -&gt; (
             resolve_relative ops s0 d0_ref ns)))))
   <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; dir_ref&#39; -&gt; name <span class="dt">list</span> -&gt; ((dir_ref&#39;,inode_ref&#39;)ty_resolve_relative_ok,error) ok_or_err) = resolve_relative
@@ -458,7 +481,7 @@ open Fs_spec_everything;;</code></pre>
  <span class="co">(* assumes root not none *)</span>
  <span class="kw">let</span> process_name_list ops s0 cwd nl = (
    <span class="kw">let</span> root = dest_Some (ops.get_root1 s0) <span class="kw">in</span>
-   <span class="kw">if</span> nl.ns2 = [<span class="st">&quot;&quot;</span>] <span class="kw">then</span> <span class="dt">Err2</span>(<span class="dt">ENOENT</span>,nl) <span class="co">(* nl.ns2 was the empty string *)</span>
+   <span class="kw">if</span> nl.ns2 = [<span class="st">&quot;&quot;</span>] <span class="kw">then</span> <span class="dt">Err2</span>(<span class="dt">ENOENT</span>,nl,cwd)  <span class="co">(* nl.ns2 was the empty string; posix/rename ENOENT:3 *)</span>
    <span class="kw">else</span> (
      <span class="kw">let</span> is_absolute_nl = (List<span class="kw">.</span>hd nl.ns2 = <span class="st">&quot;&quot;</span>) <span class="kw">in</span>
      <span class="kw">let</span> r = (
@@ -479,7 +502,7 @@ open Fs_spec_everything;;</code></pre>
        | <span class="dt">None4</span> (d0_ref,n) -&gt; 
          <span class="kw">let</span> rp = {cwd3=cwd; nl3=nl; ns3=(real_path_dir_ref ops s0 d0_ref)@[n] } <span class="kw">in</span>
          <span class="dt">None2</span> (d0_ref,n,rp))
-     | <span class="dt">Err3</span> x -&gt; (<span class="dt">Err2</span>(x,nl))))
+     | <span class="dt">Err3</span> x -&gt; (<span class="dt">Err2</span>(x,nl,cwd))))
   <span class="kw">let</span> (_:ty_ops&#39; -&gt; ty_impl&#39; -&gt; dir_ref&#39; -&gt; ty_name_list -&gt; rname&#39;) = process_name_list
 
   <span class="co">(* guarantees: returns option of Fname or Dname  *)</span>
@@ -533,6 +556,8 @@ open Fs_spec_everything;;</code></pre>
   <span class="kw">let</span> resolve_subdir = Resolve<span class="kw">.</span>subdir
   <span class="kw">let</span> ends_with_slash = Resolve<span class="kw">.</span>ends_with_slash
 
+  <span class="kw">let</span> is_linux_arch ops s0 = (
+    ops.get_arch1 s0 = linux_arch)
 
   <span class="co">(* type error = Fs_types1.error *)</span>
   <span class="kw">type</span> (&#39;impl,&#39;a) ty_return3 = ((&#39;impl * Fs_types1<span class="kw">.</span>error, &#39;impl * &#39;a) sum) finset
@@ -574,14 +599,20 @@ open Fs_spec_everything;;</code></pre>
   <span class="kw">let</span> get_state = <span class="dt">Mymonad</span> (<span class="kw">fun</span> (s) -&gt; finset_singleton(<span class="dt">Inr</span>(s,s)))
   <span class="kw">let</span> put_state s0 = <span class="dt">Mymonad</span> (<span class="kw">fun</span> (s) -&gt; finset_singleton(<span class="dt">Inr</span>(s0,<span class="dt">None1</span>)))
   <span class="kw">let</span> myraise e = <span class="dt">Mymonad</span> (<span class="kw">fun</span> (s) -&gt; finset_singleton(<span class="dt">Inl</span>(s,e)))
+  <span class="kw">let</span> dummy_return = <span class="dt">None1</span>  <span class="co">(* expected that None1 is thrown away by subsequent processing steps *)</span>
   <span class="kw">let</span> maybe_raise e = <span class="dt">Mymonad</span> (<span class="kw">fun</span> (s) -&gt; 
-    finset_insert (<span class="dt">Inr</span>(s,())) (finset_singleton(<span class="dt">Inl</span>(s,e))))
+    finset_insert (<span class="dt">Inr</span>(s,dummy_return)) (finset_singleton(<span class="dt">Inl</span>(s,e))))  
+
+  <span class="kw">let</span> maybe_raises es = <span class="dt">Mymonad</span> (<span class="kw">fun</span> (s) -&gt; 
+    <span class="kw">let</span> f1 e = <span class="dt">Inl</span>(s,e) <span class="kw">in</span>
+    <span class="kw">let</span> ses = finset_image f1 es <span class="kw">in</span>
+    finset_insert (<span class="dt">Inr</span>(s,dummy_return)) ses)
 
   <span class="co">(* bes is a list of (b,e); if exists a b that is true, raise those e&#39;s where b is true, else do nothing *)</span>
   <span class="kw">let</span> cond_raise bes = <span class="dt">Mymonad</span> (<span class="kw">fun</span> s -&gt;
     <span class="kw">let</span> bs = List<span class="kw">.</span>filter (<span class="kw">fun</span> (b,e) -&gt; b=true) bes <span class="kw">in</span>
     <span class="kw">if</span> bs=[] <span class="kw">then</span> 
-      finset_singleton(<span class="dt">Inr</span>(s,()))
+      finset_singleton(<span class="dt">Inr</span>(s,dummy_return))
     <span class="kw">else</span>
       finset_image (<span class="kw">fun</span> (b,e) -&gt; <span class="dt">Inl</span>(s,e)) bs)      
 
@@ -590,7 +621,7 @@ open Fs_spec_everything;;</code></pre>
   <span class="co">(* for a deterministic version, choose some particular value *)</span>
   <span class="kw">let</span> choose xs = <span class="dt">Mymonad</span> (<span class="kw">fun</span> s -&gt; finset_singleton(<span class="dt">Inr</span>(s,finset_choose xs)))
 
-  <span class="kw">let</span> do_nothing = <span class="dt">Mymonad</span> (<span class="kw">fun</span> s -&gt; finset_singleton(<span class="dt">Inr</span>(s,())))
+  <span class="kw">let</span> do_nothing = <span class="dt">Mymonad</span> (<span class="kw">fun</span> s -&gt; finset_singleton(<span class="dt">Inr</span>(s,dummy_return)))  <span class="co">(* expected that None1 is thrown away by subsequent processing steps *)</span>
 
   <span class="kw">let</span> run_mymonad (<span class="dt">Mymonad</span> f) s = (f (s))
   <span class="kw">let</span> (_:(&#39;a,&#39;b) mymonad -&gt; &#39;a -&gt; (&#39;a,&#39;b) ty_return3) = run_mymonad
@@ -643,17 +674,17 @@ open Fs_spec_everything;;</code></pre>
       | <span class="dt">None2</span> (d0_ref,n,rp) -&gt; (
         <span class="kw">let</span> s0 = ops.link_file1 s0 i0_ref d0_ref n <span class="kw">in</span>
         put_state&#39; s0)
-      | <span class="dt">Err2</span>(e,_) -&gt; (
+      | <span class="dt">Err2</span>(e,_,_) -&gt; (
         <span class="co">(* (maybe_raise EEXIST) &gt;&gt;= fun _x_ -&gt; (* arguably linux bug *) *)</span>
         myraise e)
       | <span class="dt">Fname2</span> _ -&gt; (myraise <span class="dt">EEXIST</span>)
       | <span class="dt">Dname2</span> _ -&gt; (myraise <span class="dt">EEXIST</span>))
     | <span class="dt">Dname2</span> _ -&gt; (
       (<span class="kw">match</span> dpath <span class="kw">with</span>
-        | <span class="dt">Err2</span>(e,_) -&gt; (maybe_raise e)
+        | <span class="dt">Err2</span>(e,_,_) -&gt; (maybe_raise e)
         | _ -&gt; do_nothing) &gt;&gt;= (<span class="kw">fun</span> _x_ -&gt;
       myraise <span class="dt">EPERM</span>))
-    | <span class="dt">Err2</span>(e,_) -&gt; (myraise e)
+    | <span class="dt">Err2</span>(e,_,_) -&gt; (myraise e)
     | <span class="dt">None2</span> __ -&gt; (myraise <span class="dt">ENOENT</span>))
 
   <span class="kw">let</span> mkdir ops rpath perms = (
@@ -663,7 +694,7 @@ open Fs_spec_everything;;</code></pre>
     | <span class="dt">None2</span>(d0_ref,n,_) -&gt; (
       <span class="kw">let</span> s0 = ops.mkdir1 s0 d0_ref n <span class="kw">in</span>
       put_state&#39; s0)
-    | <span class="dt">Err2</span>(e,_) -&gt; (myraise e)
+    | <span class="dt">Err2</span>(e,_,_) -&gt; (myraise e)
     | <span class="dt">Dname2</span> _ -&gt; (myraise <span class="dt">EEXIST</span>)
     | <span class="dt">Fname2</span> _ -&gt; (myraise <span class="dt">EEXIST</span>))
 
@@ -684,7 +715,7 @@ open Fs_spec_everything;;</code></pre>
     <span class="kw">match</span> rpath <span class="kw">with</span> 
     | <span class="dt">Dname2</span> _ -&gt; (myraise <span class="dt">EEXIST</span>) 
     | <span class="dt">Fname2</span> _ -&gt; (myraise <span class="dt">EEXIST</span>)
-    | <span class="dt">Err2</span> (e,_) -&gt; (myraise e)
+    | <span class="dt">Err2</span> (e,_,_) -&gt; (myraise e)
     | <span class="dt">None2</span>(d0_ref,n,ns) -&gt; (
       <span class="co">(* FIXME for us, open_create should only create files *)</span>
       <span class="kw">if</span> ends_with_slash rpath <span class="kw">then</span> 
@@ -699,7 +730,7 @@ open Fs_spec_everything;;</code></pre>
     <span class="kw">match</span> rn <span class="kw">with</span> 
     | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>)
     | <span class="dt">Dname2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>)
-    | <span class="dt">Err2</span> (e,_) -&gt; (myraise e)
+    | <span class="dt">Err2</span> (e,_,_) -&gt; (myraise e)
     | <span class="dt">Fname2</span>(d0_ref,n,i0_ref,rp) -&gt; (
       get_state &gt;&gt;= (<span class="kw">fun</span> s0 -&gt; (
       <span class="kw">let</span> r = ops.read1 s0 i0_ref <span class="kw">in</span> <span class="co">(* FIXME Fs_ops1 may have to take an offset too *)</span>
@@ -720,7 +751,7 @@ open Fs_spec_everything;;</code></pre>
   <span class="kw">let</span> readdir ops rn = (
     get_state &gt;&gt;= (<span class="kw">fun</span> s0 -&gt; (
     <span class="kw">match</span> rn <span class="kw">with</span> 
-    | <span class="dt">Err2</span> (e,_) -&gt; (myraise e)
+    | <span class="dt">Err2</span> (e,_,_) -&gt; (myraise e)
     | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>) <span class="co">(* (raise (Unix_error (ENOENT,&quot;readdir&quot;,&quot;/FIXMEreaddir&quot;))) (* FIXME we may need access to the underlying path that was given by the user *) *)</span>
     | <span class="dt">Fname2</span> _ -&gt; (myraise <span class="dt">ENOTDIR</span>) <span class="co">(* (raise (Unix_error (ENOTDIR,&quot;readdir&quot;,&quot;/FIXMEreaddir&quot;))) *)</span>
     | <span class="dt">Dname2</span>(d0_ref,rp) -&gt; (
@@ -735,7 +766,7 @@ open Fs_spec_everything;;</code></pre>
   <span class="co">(* FIXME rename to subdir of self? *)</span>
   <span class="co">(* NB if an error is possible, then all transitions result in an error; we should check that this invariant holds of the spec *)</span>
 
-  <span class="co">(* posix/2 *)</span>
+  <span class="co">(* posix/rename *)</span>
 
   <span class="kw">let</span> rename ops rsrc rdst = (
     get_state &gt;&gt;= (<span class="kw">fun</span> s0 -&gt; 
@@ -743,89 +774,105 @@ open Fs_spec_everything;;</code></pre>
     | <span class="dt">None2</span> _ -&gt; (
       <span class="co">(* target may have ENOENT path *)</span>
       (<span class="kw">match</span> rdst <span class="kw">with</span> 
-      | <span class="dt">Err2</span> (e&#39;,_) -&gt; (
-        maybe_raise e&#39;) <span class="co">(* tr/11 *)</span>
-      | _ -&gt; do_nothing) &gt;&gt;= (<span class="kw">fun</span> _x_ -&gt; (
-        myraise <span class="dt">ENOENT</span>))) <span class="co">(* no src file *)</span>
-    | <span class="dt">Err2</span> (e,_) -&gt; (
-      <span class="co">(* target may have ENOENT path *)</span>
+      | <span class="dt">Err2</span> (e&#39;,_,_) -&gt; (
+        maybe_raise e&#39;)  <span class="co">(* tr/11 *)</span>
+      | _ -&gt; do_nothing) 
+      &gt;&gt;= (<span class="kw">fun</span> _x_ -&gt; 
+        myraise <span class="dt">ENOENT</span>))  <span class="co">(* no src file; posix/rename ENOENT:1 *)</span> 
+    | <span class="dt">Err2</span> (e,_,_) -&gt; (
       (<span class="kw">match</span> rdst <span class="kw">with</span> 
-      | <span class="dt">Err2</span> (e&#39;,_) -&gt; (
+      | <span class="dt">Err2</span> (e&#39;,_,_) -&gt; (
         maybe_raise e&#39;) <span class="co">(* tr/1 *)</span>
-      | _ -&gt; do_nothing) &gt;&gt;= (<span class="kw">fun</span> _x_ -&gt; (
-      myraise e))) <span class="co">(* tr/2 *)</span>
+      | _ -&gt; do_nothing) 
+      &gt;&gt;= (<span class="kw">fun</span> _x_ -&gt; 
+        myraise e))  <span class="co">(* tr/2 *)</span>
     | <span class="dt">Fname2</span> (d0_ref,nsrc,i0_ref,rp) -&gt; (
       <span class="kw">match</span> rdst <span class="kw">with</span> 
-      | <span class="dt">Err2</span> (e,_) -&gt; (myraise e)
+      | <span class="dt">Err2</span> (e,_,_) -&gt; (myraise e)
       | <span class="dt">None2</span> (d1_ref,ndst,rp) -&gt; (
         (<span class="kw">let</span> cond1 = ends_with_slash rdst <span class="kw">in</span>
-        cond_raise [(cond1,<span class="dt">ENOTDIR</span>)]) &gt;&gt;= <span class="kw">fun</span> _x_ -&gt; <span class="co">(* tr/3 similar to tr/5 *)</span>
-        <span class="co">(* do the move; there is no file ns_dst *)</span>
-        put_state&#39;&#39; (<span class="kw">fun</span> () -&gt; ops.mv1 s0 d0_ref nsrc d1_ref ndst))
+        cond_raise [(cond1,<span class="dt">ENOTDIR</span>)])  <span class="co">(* tr/3 similar to tr/5; posix/rename ENOTDIR:4 *)</span>
+        &gt;&gt;= (<span class="kw">fun</span> _x_ -&gt; 
+          <span class="co">(* do the move; there is no file ns_dst *)</span>
+          put_state&#39;&#39; (<span class="kw">fun</span> () -&gt; ops.mv1 s0 d0_ref nsrc d1_ref ndst)))
       | <span class="dt">Fname2</span> (d1_ref,ndst,i1_ref,rp) -&gt; (
         <span class="co">(* do the move; there is a file name ns_dst *)</span>
-        <span class="kw">if</span> (d1_ref=d0_ref) &amp;&amp; (ndst=nsrc) <span class="kw">then</span> 
-          return <span class="dt">None1</span> <span class="co">(* tr/4 *)</span>
+        <span class="kw">if</span> (i1_ref=i0_ref) <span class="kw">then</span> 
+          return <span class="dt">None1</span>  <span class="co">(* tr/4; posix/rename RENAME:3 *)</span>
         <span class="kw">else</span>
           put_state&#39;&#39; (<span class="kw">fun</span> () -&gt; ops.mv1 s0 d0_ref nsrc d1_ref ndst))
         <span class="co">(* FIXME may want to have putstate return a void value *)</span>
       | <span class="dt">Dname2</span> (d0_ref,rp) -&gt; (
-        <span class="co">(* several reasonable options *)</span>
-        (<span class="kw">if</span> (ends_with_slash rdst) <span class="kw">then</span> 
-          maybe_raise <span class="dt">ENOTDIR</span>         <span class="co">(* tr/5 arguably a Linux bug? Confirmed non-posix behaviour *)</span>
+        (<span class="kw">if</span> (is_linux_arch ops s0 &amp;&amp; ends_with_slash rdst) <span class="kw">then</span> 
+          maybe_raise <span class="dt">ENOTDIR</span>  <span class="co">(* tr/5 even if empty; arguably a Linux bug? Confirmed non-posix behaviour *)</span>
         <span class="kw">else</span> 
-          do_nothing) &gt;&gt;= (<span class="kw">fun</span> _x_ -&gt; 
-        <span class="kw">if</span> ((ops.readdir1 s0 d0_ref).ret2&lt;&gt;Names1[]) <span class="kw">then</span> 
-          maybe_raise <span class="dt">ENOTEMPTY</span>       <span class="co">(* tr/6 strange, but posix allows this; FIXME posix also allows EEXIST in this case *)</span>
-        <span class="kw">else</span>
-          do_nothing) &gt;&gt;= (<span class="kw">fun</span> _x_ -&gt;
-        myraise <span class="dt">EISDIR</span>))) <span class="co">(* expected *)</span>
+          do_nothing) 
+        &gt;&gt;= (<span class="kw">fun</span> _x_ -&gt; 
+          <span class="kw">if</span> ((ops.readdir1 s0 d0_ref).ret2&lt;&gt;Names1[]) <span class="kw">then</span> 
+            maybe_raises [<span class="dt">ENOTEMPTY;EEXIST]</span>  <span class="co">(* tr/6 ENOTEMPTY:1 *)</span>
+          <span class="kw">else</span> 
+            do_nothing)
+        &gt;&gt;= (<span class="kw">fun</span> _x_ -&gt;
+          myraise <span class="dt">EISDIR</span>))) <span class="co">(* posix/rename EISDIR:1 *)</span>
     | <span class="dt">Dname2</span> (d0_ref,rps) -&gt; (
       <span class="co">(* rename a directory; directory exists *)</span>
       <span class="kw">match</span> rdst <span class="kw">with</span>
       | <span class="dt">None2</span> (d1_ref,ndst,rpd) -&gt; (
         <span class="co">(* do the move; there is no file ns_dst *)</span>
         <span class="kw">if</span> (resolve_subdir rps rpd) <span class="kw">then</span> 
-          myraise <span class="dt">EINVAL</span>
+          myraise <span class="dt">EINVAL</span>  <span class="co">(* posix/rename EINVAL:1 *)</span>
         <span class="kw">else</span>
           <span class="kw">let</span> p = ops.get_parent1 s0 d0_ref <span class="kw">in</span>
           <span class="kw">match</span> p <span class="kw">with</span> 
           | <span class="dt">None</span> -&gt; (
-            <span class="co">(* src was root *)</span>
-            myraise <span class="dt">EINVAL</span>)
+            <span class="co">(* src was root; can&#39;t happen because resolve_subdir would be true *)</span>
+            failwith <span class="st">&quot;impossible&quot;</span>) 
           | <span class="dt">Some</span>(d0_ref,nsrc) -&gt; (
             put_state&#39;&#39; (<span class="kw">fun</span> () -&gt; ops.mvdir1 s0 d0_ref nsrc d1_ref ndst)))
-      | <span class="dt">Err2</span> (e,_) -&gt; (
-        (maybe_raise <span class="dt">EINVAL</span>) &gt;&gt;= (<span class="kw">fun</span> _x_ -&gt; <span class="co">(* tr/7 confirmed non-posix behaviour *)</span>
-        myraise e))
+      | <span class="dt">Err2</span> (e,nl,cwd) -&gt; (
+        <span class="co">(* we need to check if the error was because of a trailing slash on a path that identified a non-directory file *)</span>
+        <span class="co">(* FIXME this is a horrible part of the rename spec; alternatives? *)</span>
+        (<span class="kw">if</span> (last nl.ns2 = <span class="st">&quot;&quot;</span>) <span class="kw">then</span>
+          <span class="kw">let</span> nl&#39; = {nl <span class="kw">with</span> ns2=(butlast nl.ns2)} <span class="kw">in</span>
+          <span class="kw">let</span> rn = Resolve<span class="kw">.</span>process_name_list ops s0 cwd nl&#39; <span class="kw">in</span>
+          <span class="kw">match</span> rn <span class="kw">with</span>
+          | <span class="dt">Fname2</span>(_,_,_,rpd) -&gt; (
+            <span class="kw">if</span> (resolve_subdir rps rpd) <span class="kw">then</span>
+              maybe_raise <span class="dt">EINVAL</span>   <span class="co">(* tr/7 FIXME maybe non-posix behaviour; not clear if posix/rename EINVAL:1 applies *)</span>
+            <span class="kw">else</span>
+              do_nothing)
+          | _ -&gt; do_nothing
+        <span class="kw">else</span>
+          do_nothing)
+        &gt;&gt;= (<span class="kw">fun</span> _x_ -&gt; 
+          myraise e))
       | <span class="dt">Fname2</span> (_,_,_,rpd) -&gt; (
-        <span class="co">(* check rename to subdir before rename to file; NB there are different reasonable options here *)</span>
         (<span class="kw">if</span> (resolve_subdir rps rpd) <span class="kw">then</span>
-          maybe_raise <span class="dt">EINVAL</span> 
+          maybe_raise <span class="dt">EINVAL</span>  <span class="co">(* posix/rename EINVAL:1 ; similar to tr/7 *)</span>
         <span class="kw">else</span> 
-          do_nothing) &gt;&gt;= (<span class="kw">fun</span> _x_ -&gt; 
-        myraise <span class="dt">ENOTDIR</span>)) 
+          do_nothing)
+        &gt;&gt;= (<span class="kw">fun</span> _x_ -&gt; 
+          myraise <span class="dt">ENOTDIR</span>))  <span class="co">(* posix/rename ENOTDIR:2 *)</span>
       | <span class="dt">Dname2</span> (d1_ref,rpd) -&gt; (
         <span class="co">(* if same dir, return silently *)</span>
-        <span class="kw">if</span> (d1_ref=d0_ref) <span class="kw">then</span>
-          (return <span class="dt">None1</span>) <span class="co">(* tr/8 *)</span>
-        <span class="co">(* FIXME check if renaming to a subdir *)</span> <span class="co">(* FIXME following two exceptions should be maybe_raise *)</span>
-        <span class="kw">else</span> <span class="kw">if</span> (resolve_subdir rps rpd) <span class="kw">then</span> 
-          (myraise <span class="dt">EINVAL</span>)
-        <span class="co">(* FIXME check if dir not empty *)</span>
-        <span class="kw">else</span> <span class="kw">if</span> ((ops.readdir1 s0 d1_ref).ret2&lt;&gt;Names1[]) <span class="kw">then</span> 
-          (myraise <span class="dt">ENOTEMPTY</span>) <span class="co">(* tr/9 *)</span>
-        <span class="co">(* otherwise target dir is empty; do rename; FIXME presumably root, if empty, can&#39;t be target unless src=root *)</span>
+        (<span class="kw">if</span> (d1_ref=d0_ref) <span class="kw">then</span>
+          (return <span class="dt">None1</span>) <span class="co">(* tr/8  posix/rename RENAME:3 *)</span>
+        <span class="kw">else</span> 
+          do_nothing)
+        &gt;&gt;= (<span class="kw">fun</span> _x_ -&gt; 
+          <span class="kw">let</span> cond1 = resolve_subdir rps rpd <span class="kw">in</span>  <span class="co">(* posix/rename EINVAL:1 *)</span>
+          <span class="kw">let</span> cond2 = ((ops.readdir1 s0 d1_ref).ret2&lt;&gt;Names1[]) <span class="kw">in</span>  <span class="co">(* tr/9 ; posix/rename ENOTEMPTY:1 *)</span>
+          cond_raise [(cond1,<span class="dt">EINVAL</span>);(cond2,<span class="dt">ENOTEMPTY</span>);(cond2,<span class="dt">EEXIST</span>)])
+        &gt;&gt;= (<span class="kw">fun</span> _x_ -&gt; 
         <span class="co">(* FIXME with the unix backend, we really don&#39;t want to execute this last because we know we are going to raise an error; but we must allow for future stages to raise further exceptions *)</span>
-        <span class="kw">else</span>
           <span class="kw">let</span> x = ops.get_parent1 s0 d0_ref <span class="kw">in</span>
           <span class="kw">let</span> y = ops.get_parent1 s0 d1_ref <span class="kw">in</span>
           <span class="kw">match</span> (x,y) <span class="kw">with</span>
-          | (<span class="dt">None</span>,_) -&gt; (myraise <span class="dt">EINVAL</span>)
+          | (<span class="dt">None</span>,_) -&gt; (failwith <span class="st">&quot;impossible 1763&quot;</span>)  <span class="co">(* attempt to rename root; captured by cond1 above *)</span>
           | (_,<span class="dt">None</span>) -&gt; (
-            failwith <span class="st">&quot;impossible rename of dir onto root; can&#39;t happen because dst must be nonempty&quot;</span>)
+            failwith <span class="st">&quot;impossible 1765 rename of dir onto root; can&#39;t happen because dst must be nonempty&quot;</span>)
           | (<span class="dt">Some</span>(d0_ref&#39;,nsrc),<span class="dt">Some</span>(d1_ref&#39;,ndst)) -&gt; (
-            put_state&#39;&#39; (<span class="kw">fun</span> () -&gt; ops.mvdir1 s0 d0_ref&#39; nsrc d1_ref&#39; ndst))))))
+            put_state&#39;&#39; (<span class="kw">fun</span> () -&gt; ops.mvdir1 s0 d0_ref&#39; nsrc d1_ref&#39; ndst)))))))
   <span class="kw">let</span> (_:ty_ops&#39; -&gt; res_name&#39; -&gt; res_name&#39; -&gt; ret_value ty_mymonad&#39;) = rename      
 
   <span class="kw">let</span> rmdir ops rpath = (
@@ -846,13 +893,13 @@ open Fs_spec_everything;;</code></pre>
           put_state&#39; s0))
     | <span class="dt">Fname2</span> _ -&gt; (myraise <span class="dt">ENOTDIR</span>)
     | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>)
-    | <span class="dt">Err2</span> (e,_) -&gt; (myraise e))
+    | <span class="dt">Err2</span> (e,_,_) -&gt; (myraise e))
 
   <span class="kw">let</span> stat ops rn = (
     get_state &gt;&gt;= (<span class="kw">fun</span> s0 -&gt; (
     <span class="co">(* let _ = (print_endline (&quot;stat: &quot;^(string_of_res_name rn))) in *)</span>
     <span class="kw">match</span> rn <span class="kw">with</span>
-    | <span class="dt">Err2</span> (e,_) -&gt; (myraise e)
+    | <span class="dt">Err2</span> (e,_,_) -&gt; (myraise e)
     | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>) 
     | <span class="dt">Fname2</span>(d0_ref,n,i0_ref,rp) -&gt; (return (<span class="dt">Stats1</span> (default_file_stats ops s0 i0_ref)))
     | <span class="dt">Dname2</span>(d0_ref,rp) -&gt; (return (<span class="dt">Stats1</span> (default_dir_stats ops s0 d0_ref)))))) 
@@ -861,7 +908,7 @@ open Fs_spec_everything;;</code></pre>
   <span class="kw">let</span> truncate ops rpath len = (
     get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
     <span class="kw">match</span> rpath <span class="kw">with</span> 
-    | <span class="dt">Err2</span> (e,_) -&gt; (myraise e)
+    | <span class="dt">Err2</span> (e,_,_) -&gt; (myraise e)
     | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>)
     | <span class="dt">Dname2</span> _ -&gt; (myraise <span class="dt">EISDIR</span>) <span class="co">(* FIXME check error messages are sensible *)</span>
     | <span class="dt">Fname2</span>(d0_ref,n,i0_ref,rp) -&gt; (
@@ -876,7 +923,7 @@ open Fs_spec_everything;;</code></pre>
   <span class="kw">let</span> unlink ops rpath = (
     get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt;
     <span class="kw">match</span> rpath <span class="kw">with</span> 
-    | <span class="dt">Err2</span>(e,_) -&gt; (myraise e)
+    | <span class="dt">Err2</span>(e,_,_) -&gt; (myraise e)
     | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>)
     | <span class="dt">Dname2</span> _ -&gt; (myraise <span class="dt">EISDIR</span>) <span class="co">(* LSB has EISDIR; POSIX requires EPERM *)</span>
     | <span class="dt">Fname2</span>(d0_ref,n,i0_ref,rp) -&gt; (
@@ -888,7 +935,7 @@ open Fs_spec_everything;;</code></pre>
   <span class="kw">let</span> write ops rn ofs bs len = (
     get_state &gt;&gt;= <span class="kw">fun</span> s0 -&gt; 
     <span class="kw">match</span> rn <span class="kw">with</span> 
-    | <span class="dt">Err2</span> (e,_) -&gt; (myraise e)
+    | <span class="dt">Err2</span> (e,_,_) -&gt; (myraise e)
     | <span class="dt">None2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>) 
     | <span class="dt">Dname2</span> _ -&gt; (myraise <span class="dt">ENOENT</span>)
     | <span class="dt">Fname2</span>(d0_ref,n,i0_ref,rp) -&gt; (
@@ -979,7 +1026,7 @@ open Fs_spec_everything;;</code></pre>
       <span class="kw">let</span> (s&#39;,v) = process_label ops s lbl <span class="kw">in</span>
       xs@[(List<span class="kw">.</span>length xs,lbl,(s&#39;,v))])
     <span class="kw">in</span>
-    <span class="kw">let</span> dummy_lbl = <span class="dt">FS_STAT</span>(<span class="dt">Err2</span>(<span class="dt">EINVAL</span>, { ns2=[<span class="st">&quot;dummy lbl&quot;</span>] })) <span class="kw">in</span>
+    <span class="kw">let</span> dummy_lbl = <span class="dt">FS_STAT</span>(<span class="dt">Err2</span>(<span class="dt">EINVAL</span>, { ns2=[<span class="st">&quot;dummy lbl&quot;</span>] }, dest_Some(ops.get_root1 s0))) <span class="kw">in</span>
     <span class="kw">let</span> dummy_error_or_value = <span class="dt">Inr</span> <span class="dt">None1</span> <span class="kw">in</span>
     List<span class="kw">.</span>fold_left f1 [(0,dummy_lbl,(s0,dummy_error_or_value))] lbls)
   <span class="kw">let</span> (_:ty_ops&#39; -&gt; state&#39; -&gt; ty_fs_label&#39; <span class="dt">list</span> -&gt; (<span class="dt">int</span> * ty_fs_label&#39; * (state&#39; * (error,ret_value)sum)) <span class="dt">list</span>) = process_labels

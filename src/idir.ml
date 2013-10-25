@@ -198,6 +198,7 @@ let state0 = {es1=empty_es1; cs1=fmap_empty}
 
 let ops1 = {
   get_init_state1=(fun () -> state0);
+  get_arch1=(fun _ -> default_arch);
   get_parent1=(fun _x_ -> fun (a,ns) -> if ns = [] then None else Some((a,butlast ns),last ns));
   get_root1=(fun s0 -> Some("",[])); (* "",[]  is the dir ref for the root dir *)
   dest_dir_ref1=dest_dir_ref;

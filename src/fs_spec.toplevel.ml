@@ -32,6 +32,28 @@ module Fs_types1 = struct
 
   open Prelude
 
+  (* the spec is parameterized by various traits, combined to form an "architecture" *)
+  type architecture = {
+    abs_path_slash_slash: bool; (* whether an absolute path can start with a double slash - POSIX has implementation defined *)
+    linux_non_posix: bool; (* Linux specific behaviour that is not POSIX compliant *)
+  }
+
+  let linux_arch = {
+    abs_path_slash_slash = true;
+    linux_non_posix = true;
+  }
+
+  (* for testing, we don't want to fail every time we hit a POSIX
+     "implementation defined" feature; the following architecture is
+     POSIX, but with implementation defined features selected so that the
+     behaviour is sensible *)
+  let posix_test_arch = {
+    abs_path_slash_slash = true;
+    linux_non_posix = false;
+  }
+
+  let default_arch = posix_test_arch
+
   type num = int (* FIXME; also fix uses of type int below to be num where appropriate *)
 
   type bytes = MyDynArray.t
@@ -196,7 +218,7 @@ module Fs_types1 = struct
     Dname2 of ('dir_ref * ('dir_ref) ty_realpath1)
   | Fname2 of ('dir_ref * name * 'inode_ref * ('dir_ref) ty_realpath1)
   | None2 of ('dir_ref * name * ('dir_ref) ty_realpath1)
-  | Err2 of (error * ty_name_list)
+  | Err2 of (error * ty_name_list * 'dir_ref)  (* final component is cwd *)
   (* invariant: if Fname2 ns, then not (ns.ends_with_slash2) *)
   (* invariant: if Err2 then ns.ends_with_slash2 *)
   (* FIXME since these are resolved, we may want to include the i0_ref and d0_ref *)
@@ -207,7 +229,7 @@ module Fs_types1 = struct
     | Dname2 (_,rp) -> rp.nl3
     | Fname2 (_,_,_,rp) -> rp.nl3
     | None2 (_,_,rp) -> rp.nl3
-    | Err2 (_,nl) -> nl)
+    | Err2 (_,nl,_) -> nl)
 
   type ('dir_ref,'inode_ref) ty_fs_label = 
       FS_LINK of (('dir_ref,'inode_ref) res_name * ('dir_ref,'inode_ref) res_name)
@@ -238,6 +260,7 @@ module Fs_types1 = struct
 
   type ('dir_ref,'inode_ref,'impl) ty_ops1 = {
     get_init_state1: unit -> 'impl;
+    get_arch1:'impl -> architecture;
     get_parent1: 'impl -> 'dir_ref -> ('dir_ref * name) option; (* if root, parent is none; possibly disconnected dirs can also have no parent *)
     get_root1: 'impl -> 'dir_ref option;
     dest_dir_ref1: 'impl -> 'dir_ref -> int;
@@ -408,17 +431,17 @@ module Resolve = struct
         let m = ops.resolve11 s0 sofar n in
         match m with 
         | None -> (
-          if (ns=[]) || (ns=[""]) then (* may end in a slash *)
+          if (ns=[]) || (ns=[""]) then (* may end in a slash; FIXME what about multiple slashes? *)
             Ok3(None4(sofar,n))
           else
-            Err3(ENOENT))
+            Err3(ENOENT))  (* posix/rename ENOENT:2 *)
         | Some entry -> (
           match entry with 
           | Inr i0_ref -> (
             if ns=[] then (* not allowed to end in slash *)
               Ok3(File4(sofar,n,i0_ref)) 
             else
-              Err3(ENOTDIR))
+              Err3(ENOTDIR))  (* posix/rename ENOTDIR:1 ENOTDIR:3 ENOTDIR:5 *)
           | Inl d0_ref -> (
             resolve_relative ops s0 d0_ref ns)))))
   let (_:ty_ops' -> ty_impl' -> dir_ref' -> name list -> ((dir_ref',inode_ref')ty_resolve_relative_ok,error) ok_or_err) = resolve_relative
@@ -434,7 +457,7 @@ module Resolve = struct
  (* assumes root not none *)
  let process_name_list ops s0 cwd nl = (
    let root = dest_Some (ops.get_root1 s0) in
-   if nl.ns2 = [""] then Err2(ENOENT,nl) (* nl.ns2 was the empty string *)
+   if nl.ns2 = [""] then Err2(ENOENT,nl,cwd)  (* nl.ns2 was the empty string; posix/rename ENOENT:3 *)
    else (
      let is_absolute_nl = (List.hd nl.ns2 = "") in
      let r = (
@@ -455,7 +478,7 @@ module Resolve = struct
        | None4 (d0_ref,n) -> 
          let rp = {cwd3=cwd; nl3=nl; ns3=(real_path_dir_ref ops s0 d0_ref)@[n] } in
          None2 (d0_ref,n,rp))
-     | Err3 x -> (Err2(x,nl))))
+     | Err3 x -> (Err2(x,nl,cwd))))
   let (_:ty_ops' -> ty_impl' -> dir_ref' -> ty_name_list -> rname') = process_name_list
 
   (* guarantees: returns option of Fname or Dname  *)
@@ -518,6 +541,8 @@ module Fs_ops2 = struct
   let resolve_subdir = Resolve.subdir
   let ends_with_slash = Resolve.ends_with_slash
 
+  let is_linux_arch ops s0 = (
+    ops.get_arch1 s0 = linux_arch)
 
   (* type error = Fs_types1.error *)
   type ('impl,'a) ty_return3 = (('impl * Fs_types1.error, 'impl * 'a) sum) finset
@@ -559,14 +584,20 @@ module Fs_ops2 = struct
   let get_state = Mymonad (fun (s) -> finset_singleton(Inr(s,s)))
   let put_state s0 = Mymonad (fun (s) -> finset_singleton(Inr(s0,None1)))
   let myraise e = Mymonad (fun (s) -> finset_singleton(Inl(s,e)))
+  let dummy_return = None1  (* expected that None1 is thrown away by subsequent processing steps *)
   let maybe_raise e = Mymonad (fun (s) -> 
-    finset_insert (Inr(s,())) (finset_singleton(Inl(s,e))))
+    finset_insert (Inr(s,dummy_return)) (finset_singleton(Inl(s,e))))  
+
+  let maybe_raises es = Mymonad (fun (s) -> 
+    let f1 e = Inl(s,e) in
+    let ses = finset_image f1 es in
+    finset_insert (Inr(s,dummy_return)) ses)
 
   (* bes is a list of (b,e); if exists a b that is true, raise those e's where b is true, else do nothing *)
   let cond_raise bes = Mymonad (fun s ->
     let bs = List.filter (fun (b,e) -> b=true) bes in
     if bs=[] then 
-      finset_singleton(Inr(s,()))
+      finset_singleton(Inr(s,dummy_return))
     else
       finset_image (fun (b,e) -> Inl(s,e)) bs)      
 
@@ -575,7 +606,7 @@ module Fs_ops2 = struct
   (* for a deterministic version, choose some particular value *)
   let choose xs = Mymonad (fun s -> finset_singleton(Inr(s,finset_choose xs)))
 
-  let do_nothing = Mymonad (fun s -> finset_singleton(Inr(s,())))
+  let do_nothing = Mymonad (fun s -> finset_singleton(Inr(s,dummy_return)))  (* expected that None1 is thrown away by subsequent processing steps *)
 
   let run_mymonad (Mymonad f) s = (f (s))
   let (_:('a,'b) mymonad -> 'a -> ('a,'b) ty_return3) = run_mymonad
@@ -628,17 +659,17 @@ module Fs_ops2 = struct
       | None2 (d0_ref,n,rp) -> (
         let s0 = ops.link_file1 s0 i0_ref d0_ref n in
         put_state' s0)
-      | Err2(e,_) -> (
+      | Err2(e,_,_) -> (
         (* (maybe_raise EEXIST) >>= fun _x_ -> (* arguably linux bug *) *)
         myraise e)
       | Fname2 _ -> (myraise EEXIST)
       | Dname2 _ -> (myraise EEXIST))
     | Dname2 _ -> (
       (match dpath with
-        | Err2(e,_) -> (maybe_raise e)
+        | Err2(e,_,_) -> (maybe_raise e)
         | _ -> do_nothing) >>= (fun _x_ ->
       myraise EPERM))
-    | Err2(e,_) -> (myraise e)
+    | Err2(e,_,_) -> (myraise e)
     | None2 __ -> (myraise ENOENT))
 
   let mkdir ops rpath perms = (
@@ -648,7 +679,7 @@ module Fs_ops2 = struct
     | None2(d0_ref,n,_) -> (
       let s0 = ops.mkdir1 s0 d0_ref n in
       put_state' s0)
-    | Err2(e,_) -> (myraise e)
+    | Err2(e,_,_) -> (myraise e)
     | Dname2 _ -> (myraise EEXIST)
     | Fname2 _ -> (myraise EEXIST))
 
@@ -669,7 +700,7 @@ module Fs_ops2 = struct
     match rpath with 
     | Dname2 _ -> (myraise EEXIST) 
     | Fname2 _ -> (myraise EEXIST)
-    | Err2 (e,_) -> (myraise e)
+    | Err2 (e,_,_) -> (myraise e)
     | None2(d0_ref,n,ns) -> (
       (* FIXME for us, open_create should only create files *)
       if ends_with_slash rpath then 
@@ -684,7 +715,7 @@ module Fs_ops2 = struct
     match rn with 
     | None2 _ -> (myraise ENOENT)
     | Dname2 _ -> (myraise ENOENT)
-    | Err2 (e,_) -> (myraise e)
+    | Err2 (e,_,_) -> (myraise e)
     | Fname2(d0_ref,n,i0_ref,rp) -> (
       get_state >>= (fun s0 -> (
       let r = ops.read1 s0 i0_ref in (* FIXME Fs_ops1 may have to take an offset too *)
@@ -705,7 +736,7 @@ module Fs_ops2 = struct
   let readdir ops rn = (
     get_state >>= (fun s0 -> (
     match rn with 
-    | Err2 (e,_) -> (myraise e)
+    | Err2 (e,_,_) -> (myraise e)
     | None2 _ -> (myraise ENOENT) (* (raise (Unix_error (ENOENT,"readdir","/FIXMEreaddir"))) (* FIXME we may need access to the underlying path that was given by the user *) *)
     | Fname2 _ -> (myraise ENOTDIR) (* (raise (Unix_error (ENOTDIR,"readdir","/FIXMEreaddir"))) *)
     | Dname2(d0_ref,rp) -> (
@@ -720,7 +751,7 @@ module Fs_ops2 = struct
   (* FIXME rename to subdir of self? *)
   (* NB if an error is possible, then all transitions result in an error; we should check that this invariant holds of the spec *)
 
-  (* posix/2 *)
+  (* posix/rename *)
 
   let rename ops rsrc rdst = (
     get_state >>= (fun s0 -> 
@@ -728,89 +759,105 @@ module Fs_ops2 = struct
     | None2 _ -> (
       (* target may have ENOENT path *)
       (match rdst with 
-      | Err2 (e',_) -> (
-        maybe_raise e') (* tr/11 *)
-      | _ -> do_nothing) >>= (fun _x_ -> (
-        myraise ENOENT))) (* no src file *)
-    | Err2 (e,_) -> (
-      (* target may have ENOENT path *)
+      | Err2 (e',_,_) -> (
+        maybe_raise e')  (* tr/11 *)
+      | _ -> do_nothing) 
+      >>= (fun _x_ -> 
+        myraise ENOENT))  (* no src file; posix/rename ENOENT:1 *) 
+    | Err2 (e,_,_) -> (
       (match rdst with 
-      | Err2 (e',_) -> (
+      | Err2 (e',_,_) -> (
         maybe_raise e') (* tr/1 *)
-      | _ -> do_nothing) >>= (fun _x_ -> (
-      myraise e))) (* tr/2 *)
+      | _ -> do_nothing) 
+      >>= (fun _x_ -> 
+        myraise e))  (* tr/2 *)
     | Fname2 (d0_ref,nsrc,i0_ref,rp) -> (
       match rdst with 
-      | Err2 (e,_) -> (myraise e)
+      | Err2 (e,_,_) -> (myraise e)
       | None2 (d1_ref,ndst,rp) -> (
         (let cond1 = ends_with_slash rdst in
-        cond_raise [(cond1,ENOTDIR)]) >>= fun _x_ -> (* tr/3 similar to tr/5 *)
-        (* do the move; there is no file ns_dst *)
-        put_state'' (fun () -> ops.mv1 s0 d0_ref nsrc d1_ref ndst))
+        cond_raise [(cond1,ENOTDIR)])  (* tr/3 similar to tr/5; posix/rename ENOTDIR:4 *)
+        >>= (fun _x_ -> 
+          (* do the move; there is no file ns_dst *)
+          put_state'' (fun () -> ops.mv1 s0 d0_ref nsrc d1_ref ndst)))
       | Fname2 (d1_ref,ndst,i1_ref,rp) -> (
         (* do the move; there is a file name ns_dst *)
-        if (d1_ref=d0_ref) && (ndst=nsrc) then 
-          return None1 (* tr/4 *)
+        if (i1_ref=i0_ref) then 
+          return None1  (* tr/4; posix/rename RENAME:3 *)
         else
           put_state'' (fun () -> ops.mv1 s0 d0_ref nsrc d1_ref ndst))
         (* FIXME may want to have putstate return a void value *)
       | Dname2 (d0_ref,rp) -> (
-        (* several reasonable options *)
-        (if (ends_with_slash rdst) then 
-          maybe_raise ENOTDIR         (* tr/5 arguably a Linux bug? Confirmed non-posix behaviour *)
+        (if (is_linux_arch ops s0 && ends_with_slash rdst) then 
+          maybe_raise ENOTDIR  (* tr/5 even if empty; arguably a Linux bug? Confirmed non-posix behaviour *)
         else 
-          do_nothing) >>= (fun _x_ -> 
-        if ((ops.readdir1 s0 d0_ref).ret2<>Names1[]) then 
-          maybe_raise ENOTEMPTY       (* tr/6 strange, but posix allows this; FIXME posix also allows EEXIST in this case *)
-        else
-          do_nothing) >>= (fun _x_ ->
-        myraise EISDIR))) (* expected *)
+          do_nothing) 
+        >>= (fun _x_ -> 
+          if ((ops.readdir1 s0 d0_ref).ret2<>Names1[]) then 
+            maybe_raises [ENOTEMPTY;EEXIST]  (* tr/6 ENOTEMPTY:1 *)
+          else 
+            do_nothing)
+        >>= (fun _x_ ->
+          myraise EISDIR))) (* posix/rename EISDIR:1 *)
     | Dname2 (d0_ref,rps) -> (
       (* rename a directory; directory exists *)
       match rdst with
       | None2 (d1_ref,ndst,rpd) -> (
         (* do the move; there is no file ns_dst *)
         if (resolve_subdir rps rpd) then 
-          myraise EINVAL
+          myraise EINVAL  (* posix/rename EINVAL:1 *)
         else
           let p = ops.get_parent1 s0 d0_ref in
           match p with 
           | None -> (
-            (* src was root *)
-            myraise EINVAL)
+            (* src was root; can't happen because resolve_subdir would be true *)
+            failwith "impossible") 
           | Some(d0_ref,nsrc) -> (
             put_state'' (fun () -> ops.mvdir1 s0 d0_ref nsrc d1_ref ndst)))
-      | Err2 (e,_) -> (
-        (maybe_raise EINVAL) >>= (fun _x_ -> (* tr/7 confirmed non-posix behaviour *)
-        myraise e))
+      | Err2 (e,nl,cwd) -> (
+        (* we need to check if the error was because of a trailing slash on a path that identified a non-directory file *)
+        (* FIXME this is a horrible part of the rename spec; alternatives? *)
+        (if (last nl.ns2 = "") then
+          let nl' = {nl with ns2=(butlast nl.ns2)} in
+          let rn = Resolve.process_name_list ops s0 cwd nl' in
+          match rn with
+          | Fname2(_,_,_,rpd) -> (
+            if (resolve_subdir rps rpd) then
+              maybe_raise EINVAL   (* tr/7 FIXME maybe non-posix behaviour; not clear if posix/rename EINVAL:1 applies *)
+            else
+              do_nothing)
+          | _ -> do_nothing
+        else
+          do_nothing)
+        >>= (fun _x_ -> 
+          myraise e))
       | Fname2 (_,_,_,rpd) -> (
-        (* check rename to subdir before rename to file; NB there are different reasonable options here *)
         (if (resolve_subdir rps rpd) then
-          maybe_raise EINVAL 
+          maybe_raise EINVAL  (* posix/rename EINVAL:1 ; similar to tr/7 *)
         else 
-          do_nothing) >>= (fun _x_ -> 
-        myraise ENOTDIR)) 
+          do_nothing)
+        >>= (fun _x_ -> 
+          myraise ENOTDIR))  (* posix/rename ENOTDIR:2 *)
       | Dname2 (d1_ref,rpd) -> (
         (* if same dir, return silently *)
-        if (d1_ref=d0_ref) then
-          (return None1) (* tr/8 *)
-        (* FIXME check if renaming to a subdir *) (* FIXME following two exceptions should be maybe_raise *)
-        else if (resolve_subdir rps rpd) then 
-          (myraise EINVAL)
-        (* FIXME check if dir not empty *)
-        else if ((ops.readdir1 s0 d1_ref).ret2<>Names1[]) then 
-          (myraise ENOTEMPTY) (* tr/9 *)
-        (* otherwise target dir is empty; do rename; FIXME presumably root, if empty, can't be target unless src=root *)
+        (if (d1_ref=d0_ref) then
+          (return None1) (* tr/8  posix/rename RENAME:3 *)
+        else 
+          do_nothing)
+        >>= (fun _x_ -> 
+          let cond1 = resolve_subdir rps rpd in  (* posix/rename EINVAL:1 *)
+          let cond2 = ((ops.readdir1 s0 d1_ref).ret2<>Names1[]) in  (* tr/9 ; posix/rename ENOTEMPTY:1 *)
+          cond_raise [(cond1,EINVAL);(cond2,ENOTEMPTY);(cond2,EEXIST)])
+        >>= (fun _x_ -> 
         (* FIXME with the unix backend, we really don't want to execute this last because we know we are going to raise an error; but we must allow for future stages to raise further exceptions *)
-        else
           let x = ops.get_parent1 s0 d0_ref in
           let y = ops.get_parent1 s0 d1_ref in
           match (x,y) with
-          | (None,_) -> (myraise EINVAL)
+          | (None,_) -> (failwith "impossible 1763")  (* attempt to rename root; captured by cond1 above *)
           | (_,None) -> (
-            failwith "impossible rename of dir onto root; can't happen because dst must be nonempty")
+            failwith "impossible 1765 rename of dir onto root; can't happen because dst must be nonempty")
           | (Some(d0_ref',nsrc),Some(d1_ref',ndst)) -> (
-            put_state'' (fun () -> ops.mvdir1 s0 d0_ref' nsrc d1_ref' ndst))))))
+            put_state'' (fun () -> ops.mvdir1 s0 d0_ref' nsrc d1_ref' ndst)))))))
   let (_:ty_ops' -> res_name' -> res_name' -> ret_value ty_mymonad') = rename      
 
   let rmdir ops rpath = (
@@ -831,13 +878,13 @@ module Fs_ops2 = struct
           put_state' s0))
     | Fname2 _ -> (myraise ENOTDIR)
     | None2 _ -> (myraise ENOENT)
-    | Err2 (e,_) -> (myraise e))
+    | Err2 (e,_,_) -> (myraise e))
 
   let stat ops rn = (
     get_state >>= (fun s0 -> (
     (* let _ = (print_endline ("stat: "^(string_of_res_name rn))) in *)
     match rn with
-    | Err2 (e,_) -> (myraise e)
+    | Err2 (e,_,_) -> (myraise e)
     | None2 _ -> (myraise ENOENT) 
     | Fname2(d0_ref,n,i0_ref,rp) -> (return (Stats1 (default_file_stats ops s0 i0_ref)))
     | Dname2(d0_ref,rp) -> (return (Stats1 (default_dir_stats ops s0 d0_ref)))))) 
@@ -846,7 +893,7 @@ module Fs_ops2 = struct
   let truncate ops rpath len = (
     get_state >>= fun s0 ->
     match rpath with 
-    | Err2 (e,_) -> (myraise e)
+    | Err2 (e,_,_) -> (myraise e)
     | None2 _ -> (myraise ENOENT)
     | Dname2 _ -> (myraise EISDIR) (* FIXME check error messages are sensible *)
     | Fname2(d0_ref,n,i0_ref,rp) -> (
@@ -861,7 +908,7 @@ module Fs_ops2 = struct
   let unlink ops rpath = (
     get_state >>= fun s0 ->
     match rpath with 
-    | Err2(e,_) -> (myraise e)
+    | Err2(e,_,_) -> (myraise e)
     | None2 _ -> (myraise ENOENT)
     | Dname2 _ -> (myraise EISDIR) (* LSB has EISDIR; POSIX requires EPERM *)
     | Fname2(d0_ref,n,i0_ref,rp) -> (
@@ -873,7 +920,7 @@ module Fs_ops2 = struct
   let write ops rn ofs bs len = (
     get_state >>= fun s0 -> 
     match rn with 
-    | Err2 (e,_) -> (myraise e)
+    | Err2 (e,_,_) -> (myraise e)
     | None2 _ -> (myraise ENOENT) 
     | Dname2 _ -> (myraise ENOENT)
     | Fname2(d0_ref,n,i0_ref,rp) -> (
@@ -972,7 +1019,7 @@ module Fs_transition_system = struct
       let (s',v) = process_label ops s lbl in
       xs@[(List.length xs,lbl,(s',v))])
     in
-    let dummy_lbl = FS_STAT(Err2(EINVAL, { ns2=["dummy lbl"] })) in
+    let dummy_lbl = FS_STAT(Err2(EINVAL, { ns2=["dummy lbl"] }, dest_Some(ops.get_root1 s0))) in
     let dummy_error_or_value = Inr None1 in
     List.fold_left f1 [(0,dummy_lbl,(s0,dummy_error_or_value))] lbls)
   let (_:ty_ops' -> state' -> ty_fs_label' list -> (int * ty_fs_label' * (state' * (error,ret_value)sum)) list) = process_labels
